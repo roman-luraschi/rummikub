@@ -40,11 +40,12 @@ Dificultades: `easy`, `normal`, `hard`, `very_hard`, `nightmare`.
 
 El juego está en: **https://rummikub-ai.pages.dev/**
 
-Para actualizar:
+El repo es privado: https://github.com/roman-luraschi/rummikub-ai  
+Un push a `main` dispara GitHub Actions y actualiza el site. No hace falta Python.
+
+Para publicar a mano:
 
 ```powershell
 cd web
 npm run deploy
 ```
-
-La primera vez Wrangler pide login en el browser (cuenta de Cloudflare). No hace falta Python.
