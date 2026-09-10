@@ -68,16 +68,6 @@ export async function playTiles(
   );
 }
 
-export async function requestHint(id: string, difficulty = "hard") {
-  return parse(
-    await fetch(`/api/games/${id}/hint`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ difficulty }),
-    })
-  );
-}
-
 export async function tickGame(id: string): Promise<GamePayload> {
   return parse(await fetch(`/api/games/${id}/tick`, { method: "POST" }));
 }

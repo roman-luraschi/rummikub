@@ -6,7 +6,6 @@ type TileSize = "sm" | "md" | "lg";
 type Props = {
   tile: TileData;
   selected?: boolean;
-  hinted?: boolean;
   size?: TileSize;
   binding?: JokerBindingData;
   onClick?: () => void;
@@ -36,7 +35,6 @@ function resolveFace(tile: TileData, binding?: JokerBindingData) {
 export default function TileView({
   tile,
   selected,
-  hinted,
   size = "md",
   binding,
   onClick,
@@ -61,7 +59,6 @@ export default function TileView({
     `rk-tile-${size}`,
     `rk-color-${face.color}`,
     selected ? "is-selected" : "",
-    hinted ? "is-hinted" : "",
     onClick || onPointerDown ? "is-clickable" : "",
     onPointerDown ? "is-grabbable" : "",
     dragging ? "is-source" : "",

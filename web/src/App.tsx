@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { createGame, drawTile, playTiles, previewPlay, requestHint, tickGame } from "./localApi";
+import { createGame, drawTile, playTiles, previewPlay, tickGame } from "./localApi";
 import {
   buildFlights,
   elementTopLeft,
@@ -44,6 +44,8 @@ const DIFFICULTIES = [
   { id: "very_hard", label: "Very Hard" },
   { id: "nightmare", label: "Nightmare" },
 ];
+
+const NIGHTMARE_TURN_SECONDS = 60;
 
 function FaceDownRow({ count, compact, anchor }: { count: number; compact?: boolean; anchor?: string }) {
   const n = Math.min(count, compact ? 10 : 14);
@@ -97,7 +99,6 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [autoplay, setAutoplay] = useState(true);
-  const [hintIds, setHintIds] = useState<number[]>([]);
   const [flights, setFlights] = useState<FlyPiece[]>([]);
   const [hiddenIds, setHiddenIds] = useState<number[]>([]);
   const [landingIds, setLandingIds] = useState<number[]>([]);
@@ -108,16 +109,21 @@ export default function App() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [hover, setHover] = useState<DropTarget | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
+  const [turnLeft, setTurnLeft] = useState<number | null>(null);
   const gameRef = useRef<GamePayload | null>(null);
   const pilesRef = useRef<Pile[]>([]);
   const lastGameId = useRef<string | null>(null);
   const playGen = useRef(0);
+  const timedOut = useRef(false);
   gameRef.current = game;
   pilesRef.current = piles;
 
   const view = game?.view;
   const spectator = Boolean(game?.spectator);
   const canAct = Boolean(game && game.yourTurn && !view?.over && !busy && !spectator);
+  const timedTurn = Boolean(
+    !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "nightmare")
+  );
   const committedIds = useMemo(
     () => new Set(view?.table.melds.flatMap((meld) => meld.tiles.map((tile) => tile.id)) ?? []),
     [view?.table.hash]
@@ -181,10 +187,10 @@ export default function App() {
       setGame((current) =>
         current
           ? {
-              ...current,
-              yourTurn: false,
-              lastDecision: step.lastDecision ?? current.lastDecision,
-            }
+            ...current,
+            yourTurn: false,
+            lastDecision: step.lastDecision ?? current.lastDecision,
+          }
           : current
       );
     });
@@ -293,11 +299,11 @@ export default function App() {
     setGame((current) =>
       current
         ? {
-            ...current,
-            view: step.view,
-            yourTurn: step.yourTurn,
-            lastDecision: step.lastDecision ?? current.lastDecision,
-          }
+          ...current,
+          view: step.view,
+          yourTurn: step.yourTurn,
+          lastDecision: step.lastDecision ?? current.lastDecision,
+        }
         : current
     );
     await sleep(220);
@@ -321,11 +327,11 @@ export default function App() {
       setGame((current) =>
         current
           ? {
-              ...current,
-              view: step.view,
-              yourTurn: step.yourTurn,
-              lastDecision: step.lastDecision ?? current.lastDecision,
-            }
+            ...current,
+            view: step.view,
+            yourTurn: step.yourTurn,
+            lastDecision: step.lastDecision ?? current.lastDecision,
+          }
           : current
       );
       await sleep(280);
@@ -376,18 +382,18 @@ export default function App() {
     const drawnIds =
       event.type === "draw" && (!event.isBot || event.playerId === gameRef.current?.view.playerId)
         ? step.view.rack
-            .filter((tile) => !(gameRef.current?.view.rack.some((current) => current.id === tile.id)))
-            .map((tile) => tile.id)
+          .filter((tile) => !(gameRef.current?.view.rack.some((current) => current.id === tile.id)))
+          .map((tile) => tile.id)
         : landingTileIds(step);
     setLandingIds(drawnIds);
     setGame((current) =>
       current
         ? {
-            ...current,
-            view: step.view,
-            yourTurn: step.yourTurn,
-            lastDecision: step.lastDecision ?? current.lastDecision,
-          }
+          ...current,
+          view: step.view,
+          yourTurn: step.yourTurn,
+          lastDecision: step.lastDecision ?? current.lastDecision,
+        }
         : current
     );
     await sleep(280);
@@ -459,7 +465,6 @@ export default function App() {
         difficulties: setup.mode === "spectate" ? setup.botDifficulties : undefined,
       });
       setSelected([]);
-      setHintIds([]);
       await applyPayload(payload, { deal: true });
     });
   }
@@ -566,6 +571,7 @@ export default function App() {
     setResultOpen(false);
     setPiles([]);
     setBanner("");
+    setTurnLeft(null);
   }
 
   async function onDraw() {
@@ -578,10 +584,44 @@ export default function App() {
     await withBusy(async () => {
       const payload = await drawTile(game.id);
       setSelected([]);
-      setHintIds([]);
       await applyPayload(payload);
     });
   }
+
+  async function onTurnTimeout() {
+    const current = gameRef.current;
+    if (!current?.yourTurn || current.view.over || timedOut.current) return;
+    timedOut.current = true;
+    setDrag(null);
+    setHover(null);
+    setSelected([]);
+    setPiles(pilesFromMelds(current.view.table.melds));
+    setError("Se acabó el tiempo: robás del pozo.");
+    await withBusy(async () => {
+      const payload = await drawTile(current.id);
+      setSelected([]);
+      await applyPayload(payload);
+    });
+  }
+
+  useEffect(() => {
+    if (!timedTurn || !canAct) {
+      setTurnLeft(null);
+      return;
+    }
+    timedOut.current = false;
+    setTurnLeft(NIGHTMARE_TURN_SECONDS);
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      const left = Math.max(0, NIGHTMARE_TURN_SECONDS - (Date.now() - started) / 1000);
+      setTurnLeft(left);
+      if (left <= 0) {
+        window.clearInterval(id);
+        void onTurnTimeout();
+      }
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [timedTurn, canAct, game?.id, view?.history.length]);
 
   async function onPlay() {
     if (!game) return;
@@ -601,7 +641,6 @@ export default function App() {
           piles.filter((pile) => pile.tiles.length).map((pile) => pile.tiles.map((tile) => tile.id))
         );
         setSelected([]);
-        setHintIds([]);
         await applyPayload(payload);
       });
       return;
@@ -614,24 +653,10 @@ export default function App() {
       const preview = await previewPlay(game.id, selected);
       setPiles((current) => reconcilePiles(current, preview.table.melds));
       setSelected([]);
-      setHintIds([]);
       setError("");
     });
   }
 
-  async function onHint() {
-    if (!game) return;
-    await withBusy(async () => {
-      const hint = await requestHint(game.id, setup.difficulty);
-      if (hint.action === "DRAW") {
-        setError("El bot sugeriría robar del pozo.");
-        setHintIds([]);
-      } else {
-        setHintIds(hint.tileIds || []);
-        setSelected(hint.tileIds || []);
-      }
-    });
-  }
 
   const opponents = view?.names
     .map((name, i) => ({ name, i }))
@@ -893,14 +918,21 @@ export default function App() {
           <section className="rack-dock">
             <div className="rack-head">
               <div>
-                <h2>{spectator ? `Atril de ${view.names[view.playerId]}` : "Tu atril"}</h2>
+                <div className="rack-title">
+                  <h2>{spectator ? `Atril de ${view.names[view.playerId]}` : "Tu atril"}</h2>
+                  {timedTurn && turnLeft != null && (
+                    <span className={`rack-clock${turnLeft <= 10 ? " is-low" : ""}`}>
+                      {Math.ceil(turnLeft)}s
+                    </span>
+                  )}
+                </div>
                 <p>
                   {rackTiles.length} fichas
                   {spectator
                     ? " · partida automática entre bots"
                     : view.hasInitialMeld[view.playerId]
-                    ? " · bajá fichas y rearmá; el turno cierra al confirmar"
-                    : " · apertura: 30 puntos, sin comodín ni tocar la mesa"}
+                      ? " · bajá fichas y rearmá; el turno cierra al confirmar"
+                      : " · apertura: 30 puntos, sin comodín ni tocar la mesa"}
                 </p>
               </div>
               {busy && <span className="busy">{banner || "Pensando…"}</span>}
@@ -918,7 +950,6 @@ export default function App() {
                       tile={tile}
                       size="lg"
                       selected={selected.includes(tile.id)}
-                      hinted={hintIds.includes(tile.id)}
                       dimmed={hiddenIds.includes(tile.id) || drag?.tile.id === tile.id}
                       landing={landingIds.includes(tile.id)}
                       onPointerDown={canAct ? (event) => startDrag(tile, { place: "rack" }, event) : undefined}
@@ -947,9 +978,6 @@ export default function App() {
                   </button>
                   <button disabled={!canAct || !dirty} onClick={resetTable}>
                     Deshacer mesa
-                  </button>
-                  <button disabled={!game || busy || view.over} onClick={onHint}>
-                    Sugerir
                   </button>
                 </>
               )}

@@ -56,10 +56,6 @@ class PlayRequest(BaseModel):
     melds: list[list[int]] | None = None
 
 
-class HintRequest(BaseModel):
-    difficulty: str | None = None
-
-
 def _session(game_id: str) -> GameSession:
     session = GAMES.get(game_id)
     if session is None:
@@ -285,21 +281,6 @@ def tick(game_id: str) -> dict:
     except IllegalMove as exc:
         raise HTTPException(400, str(exc)) from exc
     return _payload(game_id, session, [step])
-
-
-@app.post("/api/games/{game_id}/hint")
-def hint(game_id: str, req: HintRequest = HintRequest()) -> dict:
-    session = _session(game_id)
-    if session.state.over:
-        raise HTTPException(400, "The round is over")
-    view = engine.view(session.state, session.human_id)
-    difficulty = req.difficulty or "hard"
-    move = bot.choose_move(view, difficulty, debug=True)
-    return {
-        "suggestion": decision_to_dict(move.decision),
-        "tileIds": [t.id for t in move.config.rack_used] if move.config else [],
-        "action": move.action,
-    }
 
 
 def _mount_ui() -> None:

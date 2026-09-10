@@ -1,6 +1,6 @@
 import { RummyBot, type BotDecision, type BotMove, type PlayerView } from "./bot";
 import { GameEngine, IllegalMove, type GameState } from "./game";
-import { decisionToData, payload, tableToData, viewToData } from "./serialize";
+import { payload, tableToData, viewToData } from "./serialize";
 import { configurationFromLayout, findPlayForSelectedTiles } from "./solver";
 import type { GameEvent, GamePayload, GameStep } from "../types";
 
@@ -209,16 +209,4 @@ export async function tickGame(id: string): Promise<GamePayload> {
   if (!player.isBot) throw new Error("It is not a bot turn");
   const step = await playOneBot(id, session);
   return pack(id, session, [step]);
-}
-
-export async function requestHint(id: string, difficulty = "hard") {
-  const session = sessionOf(id);
-  if (session.state.over) throw new Error("The round is over");
-  const view = engine.view(session.state, session.humanId);
-  const move = await chooseMove(view, difficulty, true);
-  return {
-    suggestion: decisionToData(move.decision),
-    tileIds: move.config ? move.config.rackUsed.map((t) => t.id) : [],
-    action: move.action,
-  };
 }

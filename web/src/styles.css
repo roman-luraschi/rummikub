@@ -209,7 +209,15 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .rack-dock { margin-top: 16px; }
 .rack-head { justify-content: space-between; margin-bottom: 8px; }
+.rack-title { display: flex; align-items: baseline; gap: 12px; }
 .rack-head p { margin: 4px 0 0; opacity: 0.75; }
+.rack-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  font-size: 22px;
+  color: var(--gold);
+}
+.rack-clock.is-low { color: #ffb4a8; }
 .busy { color: var(--gold); font-weight: 800; }
 
 .wooden-rack {
@@ -291,7 +299,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     0 22px 18px rgba(0,0,0,0.35);
   outline: 3px solid var(--gold);
 }
-.is-hinted { outline: 3px dashed #80deea; }
 .rk-color-red { color: #d32f2f; }
 .rk-color-blue { color: #1565c0; }
 .rk-color-black { color: #212121; }

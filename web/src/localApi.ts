@@ -5,7 +5,6 @@ import {
   drawTile as drawLocal,
   playTiles as playLocal,
   previewPlay as previewLocal,
-  requestHint as hintLocal,
   setMoveChooser,
   tickGame as tickLocal,
 } from "./engine/session";
@@ -74,10 +73,6 @@ export async function previewPlay(id: string, tileIds: number[]) {
 
 export async function playTiles(id: string, tileIds: number[], melds?: number[][]): Promise<GamePayload> {
   return playLocal(id, tileIds, melds);
-}
-
-export async function requestHint(id: string, difficulty = "hard") {
-  return hintLocal(id, difficulty);
 }
 
 export async function tickGame(id: string): Promise<GamePayload> {
