@@ -13,7 +13,7 @@ import {
 } from "./tile";
 import { TableSolver } from "./solver";
 
-export type Difficulty = "easy" | "normal" | "hard" | "very_hard" | "nightmare";
+export type Difficulty = "easy" | "normal" | "hard" | "very_hard" | "extreme";
 
 export interface DifficultyConfig {
   searchDepth: number;
@@ -77,7 +77,7 @@ export const CONFIGS: Record<Difficulty, DifficultyConfig> = {
     beamK: 36,
     lookaheadTop: 4,
   },
-  nightmare: {
+  extreme: {
     searchDepth: 3,
     timeLimitMs: 1000,
     simulationCount: 48,

@@ -23,7 +23,7 @@ cd C:\Users\DGOGPP\rummikub-ai
 python -m pip install -e .[dev]
 $env:PYTHONPATH='engine'
 python -m pytest
-python -m rummikub.bench --a easy --b nightmare --games 40 --seed 1
+python -m rummikub.bench --a easy --b extreme --games 40 --seed 1
 python -m uvicorn rummikub.api.server:app --host 127.0.0.1 --port 8000
 ```
 
@@ -31,10 +31,10 @@ Self-play del motor TypeScript (el que usa la UI):
 
 ```powershell
 cd web
-npm run bench -- --a easy --b nightmare --games 40 --seed 99
+npm run bench -- --a easy --b extreme --games 40 --seed 99
 ```
 
-Dificultades: `easy`, `normal`, `hard`, `very_hard`, `nightmare`.
+Dificultades: `easy`, `normal`, `hard`, `very_hard`, `extreme`.
 
 ## Publicar (Cloudflare Pages)
 

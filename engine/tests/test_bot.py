@@ -23,7 +23,7 @@ def test_bot_chooses_going_out_when_available():
         history=(),
         names=("A", "B"),
         is_bot=(True, True),
-        difficulties=("nightmare", "easy"),
+        difficulties=("extreme", "easy"),
     )
     move = RummyBot().choose_move(view, Difficulty.HARD, rng=Random(1), debug=True)
     assert move.config is not None
@@ -41,7 +41,7 @@ def test_bot_only_needs_player_view():
     assert move.action in {"DRAW", "PLAY"} or move.config is not None
 
 
-def test_nightmare_does_not_skip_a_simple_extension():
+def test_extreme_does_not_skip_a_simple_extension():
     table = table_of(run("2R 3R 4R"), run("8B 9B 10B"), group("7R 7B 7N"))
     rack = parse_tiles("5R 1A 12N")
     view = PlayerView(
@@ -56,14 +56,14 @@ def test_nightmare_does_not_skip_a_simple_extension():
         history=(),
         names=("A", "B"),
         is_bot=(True, True),
-        difficulties=("nightmare", "easy"),
+        difficulties=("extreme", "easy"),
     )
-    move = RummyBot().choose_move(view, Difficulty.NIGHTMARE, rng=Random(3), debug=False)
+    move = RummyBot().choose_move(view, Difficulty.EXTREME, rng=Random(3), debug=False)
     assert move.config is not None
     assert any(str(t) == "5R" for t in move.config.rack_used)
 
 
-def test_nightmare_must_play_when_the_pool_is_empty():
+def test_extreme_must_play_when_the_pool_is_empty():
     table = table_of(run("2R 3R 4R"))
     rack = parse_tiles("5R 1A 12N")
     view = PlayerView(
@@ -78,9 +78,9 @@ def test_nightmare_must_play_when_the_pool_is_empty():
         history=(),
         names=("A", "B"),
         is_bot=(True, True),
-        difficulties=("nightmare", "easy"),
+        difficulties=("extreme", "easy"),
     )
-    move = RummyBot().choose_move(view, Difficulty.NIGHTMARE, rng=Random(1), debug=False)
+    move = RummyBot().choose_move(view, Difficulty.EXTREME, rng=Random(1), debug=False)
     assert move.config is not None
     assert any(str(t) == "5R" for t in move.config.rack_used)
 
@@ -118,5 +118,5 @@ def test_hard_dumps_then_rearranges_in_the_same_turn():
 def test_easy_and_hard_use_different_solver_modes():
     assert CONFIGS[Difficulty.EASY].solver_mode is SolverMode.ADD_ONLY
     assert CONFIGS[Difficulty.HARD].solver_mode is SolverMode.FULL
-    assert CONFIGS[Difficulty.NIGHTMARE].time_limit_ms > CONFIGS[Difficulty.EASY].time_limit_ms
-    assert CONFIGS[Difficulty.EASY].randomness > CONFIGS[Difficulty.NIGHTMARE].randomness
+    assert CONFIGS[Difficulty.EXTREME].time_limit_ms > CONFIGS[Difficulty.EASY].time_limit_ms
+    assert CONFIGS[Difficulty.EASY].randomness > CONFIGS[Difficulty.EXTREME].randomness

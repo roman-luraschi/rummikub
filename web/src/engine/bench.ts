@@ -66,7 +66,7 @@ const games = Number(arg("--games", "10"));
 const seed = Number(arg("--seed", "1"));
 
 console.log(
-  `Self-play ${a} vs ${b}  games=${games}  seed=${seed}  (Nightmare puede tardar ~15s por partida; no está colgado.)`,
+  `Self-play ${a} vs ${b}  games=${games}  seed=${seed}  (Extreme puede tardar ~15s por partida; no está colgado.)`,
 );
 const summary = runMatch(a, b, games, seed);
 console.log(

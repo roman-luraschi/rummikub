@@ -104,7 +104,7 @@ def main() -> None:
     args = parser.parse_args()
     print(
         f"Self-play {args.a} vs {args.b}  games={args.games}  seed={args.seed}  "
-        "(Nightmare puede tardar ~15s por partida; no está colgado.)",
+        "(Extreme puede tardar ~15s por partida; no está colgado.)",
         flush=True,
     )
     summary = run_match(args.a, args.b, args.games, args.seed, progress=True)

@@ -106,12 +106,12 @@ def test_dumping_a_ready_meld_beats_drawing():
         history=(),
         names=("A", "B"),
         is_bot=(True, True),
-        difficulties=("nightmare", "easy"),
+        difficulties=("extreme", "easy"),
     )
     evaluator = StateEvaluator()
     draw = evaluator.evaluate_draw(view)
-    move = RummyBot().choose_move(view, Difficulty.NIGHTMARE, rng=Random(1), debug=False)
-    assert move.config is not None, "Nightmare must dump ready melds instead of drawing"
+    move = RummyBot().choose_move(view, Difficulty.EXTREME, rng=Random(1), debug=False)
+    assert move.config is not None, "Extreme must dump ready melds instead of drawing"
     play = evaluator.evaluate_play(view, move.config)
     assert play.total > draw.total
     assert move.config.tiles_played >= 3

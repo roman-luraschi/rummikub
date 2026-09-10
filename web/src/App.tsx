@@ -42,10 +42,10 @@ const DIFFICULTIES = [
   { id: "normal", label: "Normal" },
   { id: "hard", label: "Hard" },
   { id: "very_hard", label: "Very Hard" },
-  { id: "nightmare", label: "Nightmare" },
+  { id: "extreme", label: "Extreme" },
 ];
 
-const NIGHTMARE_TURN_SECONDS = 60;
+const EXTREME_TURN_SECONDS = 60;
 
 function FaceDownRow({ count, compact, anchor }: { count: number; compact?: boolean; anchor?: string }) {
   const n = Math.min(count, compact ? 10 : 14);
@@ -122,7 +122,7 @@ export default function App() {
   const spectator = Boolean(game?.spectator);
   const canAct = Boolean(game && game.yourTurn && !view?.over && !busy && !spectator);
   const timedTurn = Boolean(
-    !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "nightmare")
+    !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "extreme")
   );
   const committedIds = useMemo(
     () => new Set(view?.table.melds.flatMap((meld) => meld.tiles.map((tile) => tile.id)) ?? []),
@@ -610,10 +610,10 @@ export default function App() {
       return;
     }
     timedOut.current = false;
-    setTurnLeft(NIGHTMARE_TURN_SECONDS);
+    setTurnLeft(EXTREME_TURN_SECONDS);
     const started = Date.now();
     const id = window.setInterval(() => {
-      const left = Math.max(0, NIGHTMARE_TURN_SECONDS - (Date.now() - started) / 1000);
+      const left = Math.max(0, EXTREME_TURN_SECONDS - (Date.now() - started) / 1000);
       setTurnLeft(left);
       if (left <= 0) {
         window.clearInterval(id);

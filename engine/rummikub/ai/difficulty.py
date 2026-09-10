@@ -11,7 +11,7 @@ class Difficulty(str, Enum):
     NORMAL = "normal"
     HARD = "hard"
     VERY_HARD = "very_hard"
-    NIGHTMARE = "nightmare"
+    EXTREME = "extreme"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +82,7 @@ CONFIGS: dict[Difficulty, DifficultyConfig] = {
         beam_k=36,
         lookahead_top=4,
     ),
-    Difficulty.NIGHTMARE: DifficultyConfig(
+    Difficulty.EXTREME: DifficultyConfig(
         search_depth=3,
         time_limit_ms=1000,
         simulation_count=48,
