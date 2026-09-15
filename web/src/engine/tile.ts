@@ -5,6 +5,14 @@ export const ORANGE = 3;
 
 export const COLOR_NAMES = ["R", "B", "N", "A"] as const;
 export const COLOR_UI = ["red", "blue", "black", "orange"] as const;
+export const COLOR_FROM_CHAR: Record<string, number> = {
+  R: RED,
+  B: BLUE,
+  N: BLACK,
+  K: BLACK,
+  A: ORANGE,
+  O: ORANGE,
+};
 
 export const NUM_COLORS = 4;
 export const MIN_RANK = 1;
@@ -80,5 +88,29 @@ export function buildDeck(): Tile[] {
     }
   }
   for (let i = 0; i < JOKER_COUNT; i++) tiles.push(jokerTile(i));
+  return tiles;
+}
+
+export function parseTiles(spec: string): Tile[] {
+  const used = new Map<string, number>();
+  let jokerN = 0;
+  const tiles: Tile[] = [];
+  for (const token of spec.replaceAll(",", " ").split(/\s+/)) {
+    const raw = token.trim().toUpperCase();
+    if (!raw) continue;
+    if (raw === "J" || raw === "JK" || raw === "*" || raw === "JOKER" || (raw.startsWith("J") && /^\d+$/.test(raw.slice(1)))) {
+      tiles.push(jokerTile(jokerN));
+      jokerN += 1;
+      continue;
+    }
+    const rank = Number(raw.slice(0, -1));
+    const color = COLOR_FROM_CHAR[raw.slice(-1)];
+    if (!Number.isInteger(rank) || color == null) throw new Error(`Invalid tile: ${token}`);
+    const key = `${color},${rank}`;
+    const copy = used.get(key) ?? 0;
+    if (copy > 1) throw new Error(`More than two copies of ${raw}`);
+    tiles.push(numberedTile(color, rank, copy));
+    used.set(key, copy + 1);
+  }
   return tiles;
 }

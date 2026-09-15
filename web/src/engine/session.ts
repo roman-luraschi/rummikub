@@ -16,6 +16,16 @@ const GAMES = new Map<string, GameSession>();
 const engine = new GameEngine();
 const fallbackBot = new RummyBot();
 
+/** Test-only: drop in-memory games between cases. */
+export function resetSessions(): void {
+  GAMES.clear();
+}
+
+/** Test-only: inject a session without going through createGame. */
+export function putSession(id: string, session: GameSession): void {
+  GAMES.set(id, session);
+}
+
 type Chooser = (view: PlayerView, difficulty: string, debug: boolean) => Promise<BotMove>;
 let chooseMove: Chooser = async (view, difficulty, debug) =>
   fallbackBot.chooseMove(view, difficulty, debug);

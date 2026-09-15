@@ -1,7 +1,7 @@
 # Publica el juego con localtunnel (HTTPS / puerto 443).
 # La PC tiene que quedar encendida. El link cambia cada vez que lo arrancás.
 param(
-    [int]$Port = 8787
+    [int]$Port = 4173
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,32 +25,28 @@ if ($LASTEXITCODE -ne 0) {
     Pop-Location
     throw "Fallo npm run build"
 }
-Pop-Location
 
-$env:PYTHONPATH = Join-Path $Root "engine"
-Write-Host "Levantando el servidor en http://127.0.0.1:$Port ..."
-$uvicorn = Start-Process -FilePath "python" -ArgumentList @(
-    "-m", "uvicorn",
-    "rummikub.api.server:app",
-    "--host", "127.0.0.1",
-    "--port", "$Port"
-) -WorkingDirectory $Root -PassThru -NoNewWindow
+Write-Host "Levantando preview en http://127.0.0.1:$Port ..."
+$preview = Start-Process -FilePath "npm.cmd" -ArgumentList @(
+    "run", "preview", "--", "--host", "127.0.0.1", "--port", "$Port"
+) -WorkingDirectory (Join-Path $Root "web") -PassThru -NoNewWindow
+Pop-Location
 
 $ok = $false
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 250
     try {
-        $health = Invoke-RestMethod "http://127.0.0.1:$Port/api/health"
-        if ($health.ok) { $ok = $true; break }
+        $response = Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing
+        if ($response.StatusCode -eq 200) { $ok = $true; break }
     } catch {
-        if ($uvicorn.HasExited) {
-            throw "uvicorn salio antes de quedar listo (exit $($uvicorn.ExitCode)). El puerto $Port esta ocupado?"
+        if ($preview.HasExited) {
+            throw "vite preview salio antes de quedar listo (exit $($preview.ExitCode)). El puerto $Port esta ocupado?"
         }
     }
 }
 if (-not $ok) {
-    Stop-Process -Id $uvicorn.Id -Force -ErrorAction SilentlyContinue
-    throw "uvicorn no respondio en http://127.0.0.1:$Port/api/health"
+    Stop-Process -Id $preview.Id -Force -ErrorAction SilentlyContinue
+    throw "vite preview no respondio en http://127.0.0.1:$Port/"
 }
 
 $tools = Join-Path $Root "tools"
@@ -104,7 +100,7 @@ try {
     if ($tunnelProc -and -not $tunnelProc.HasExited) {
         Stop-Process -Id $tunnelProc.Id -Force -ErrorAction SilentlyContinue
     }
-    if ($uvicorn -and -not $uvicorn.HasExited) {
-        Stop-Process -Id $uvicorn.Id -Force -ErrorAction SilentlyContinue
+    if ($preview -and -not $preview.HasExited) {
+        Stop-Process -Id $preview.Id -Force -ErrorAction SilentlyContinue
     }
 }

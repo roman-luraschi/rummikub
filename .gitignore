@@ -1,20 +1,11 @@
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-dist/
-build/
-.coverage
-htmlcov/
-*.log
-.DS_Store
+node_modules/
 web/node_modules/
 web/dist/
+dist/
+build/
 tools/
+*.log
+.DS_Store
 
 # Secrets and local env
 .env
@@ -31,4 +22,3 @@ credentials.json
 .agents/
 .cursor/skills
 skills-lock.json
-

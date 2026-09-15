@@ -213,7 +213,11 @@ export class OpponentModel {
 }
 
 export class StateEvaluator {
-  evaluatePlay(view: PlayerView, config: TableConfiguration, belief: OpponentModel | null): ScoreBreakdown {
+  evaluateView(view: PlayerView, belief: OpponentModel | null = null): ScoreBreakdown {
+    return this.scoreRack(view, view.rack, view.table, belief, false, []);
+  }
+
+  evaluatePlay(view: PlayerView, config: TableConfiguration, belief: OpponentModel | null = null): ScoreBreakdown {
     return this.scoreRack(view, config.rackLeft, config.table, belief, config.rackLeft.length === 0, config.rackUsed);
   }
 
