@@ -3,7 +3,7 @@ import { pointValue } from "./meld";
 import { tableHash, tableTileIds, type Table } from "./table";
 import { buildDeck, isJoker, rackValue, type Tile } from "./tile";
 import { validateEntireTable, TableValidationError } from "./validator";
-import { SeededRng, type PlayerView, type PublicEvent } from "./bot";
+import { SeededRng, openSlots, type PlayerView, type PublicEvent } from "./bot";
 
 export const RACK_SIZE = 14;
 export const INITIAL_MELD_POINTS = 30;
@@ -125,9 +125,10 @@ export class GameEngine {
       playerId: player.id,
       type: "draw",
       tilesFromRack: [],
-      tableHash: "",
+      tableHash: tableHash(nxt.table),
       rackSize: player.rack.length,
       drawn,
+      openSlots: openSlots(nxt.table),
     });
     if (!drawn && nxt.emptyPasses >= nxt.players.length) {
       this.finishStalemate(nxt);

@@ -63,6 +63,7 @@ function eventFromView(view: ReturnType<typeof viewToData>, raw: GameSession["st
     tableHash: raw.tableHash,
     rackSize: raw.rackSize,
     drawn: raw.drawn,
+    openSlots: raw.openSlots ?? last?.openSlots,
   };
 }
 

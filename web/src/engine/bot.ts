@@ -1,4 +1,4 @@
-import { GROUP, RUN, represented } from "./meld";
+import { RUN, pointValue, represented } from "./meld";
 import { remainingDeadwood, tilesPlayed, type SolverMode, type TableConfiguration } from "./partition";
 import { nextRank, prevRank, runDisplayOrder } from "./runs";
 import { tableStr, type Table } from "./table";
@@ -97,6 +97,11 @@ export function parseDifficulty(value: string): Difficulty {
   return key;
 }
 
+export interface OpenSlot {
+  color: number;
+  rank: number;
+}
+
 export interface PublicEvent {
   playerId: number;
   type: "draw" | "play" | "initial" | "win";
@@ -104,6 +109,46 @@ export interface PublicEvent {
   tableHash: string;
   rackSize: number;
   drawn: boolean;
+  openSlots?: OpenSlot[];
+}
+
+export function slotKey(color: number, rank: number): string {
+  return `${color},${rank}`;
+}
+
+export function openSlots(table: Table): OpenSlot[] {
+  const slots: OpenSlot[] = [];
+  const seen = new Set<string>();
+  const push = (color: number, rank: number) => {
+    const key = slotKey(color, rank);
+    if (seen.has(key)) return;
+    seen.add(key);
+    slots.push({ color, rank });
+  };
+  for (const meld of table.melds) {
+    const reps = represented(meld);
+    if (meld.kind === RUN) {
+      const color = reps[0][0];
+      const order = runDisplayOrder(reps.map((s) => s[1]));
+      const occupied = new Set(order);
+      const low = prevRank(order[0]);
+      const high = nextRank(order[order.length - 1]);
+      if (!occupied.has(low)) push(color, low);
+      if (!occupied.has(high)) push(color, high);
+    } else if (reps.length === 3) {
+      const used = new Set(reps.map((s) => s[0]));
+      const rank = reps[0][1];
+      for (let color = 0; color < 4; color++) {
+        if (!used.has(color)) push(color, rank);
+      }
+    }
+  }
+  return slots;
+}
+
+export function addedOpenSlots(before: Table, after: Table): OpenSlot[] {
+  const old = new Set(openSlots(before).map((s) => slotKey(s.color, s.rank)));
+  return openSlots(after).filter((s) => !old.has(slotKey(s.color, s.rank)));
 }
 
 export interface PlayerView {
@@ -186,29 +231,51 @@ export class OpponentModel {
           }
         }
       }
+      if (event.type === "draw" && event.playerId !== view.playerId) {
+        const refused = event.openSlots ?? [];
+        for (const slot of refused) model.addHeat(slot.color, slot.rank, -2.5 * accuracy);
+      }
     }
     return model;
   }
 
   addHeat(color: number, rank: number, v: number): void {
-    const k = `${color},${rank}`;
+    const k = slotKey(color, rank);
     this.hotSlots.set(k, (this.hotSlots.get(k) ?? 0) + v);
+  }
+
+  heatSlot(color: number, rank: number): number {
+    return this.hotSlots.get(slotKey(color, rank)) ?? 0;
   }
 
   heat(t: Tile): number {
     if (isJoker(t)) return 1.4;
-    return this.hotSlots.get(`${tileColor(t)},${tileRank(t)}`) ?? 0;
+    return this.heatSlot(tileColor(t), tileRank(t));
   }
 
   sampleHidden(count: number, rng: () => number): Tile[] {
     if (count <= 0) return [];
     if (count >= this.unknown.length) return [...this.unknown];
-    const copy = [...this.unknown];
-    for (let i = copy.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [copy[i], copy[j]] = [copy[j], copy[i]];
+    const pool = this.unknown.map((t) => ({
+      t,
+      w: Math.max(0.05, 0.2 + (0.35 + this.heat(t)) * this.accuracy),
+    }));
+    const picked: Tile[] = [];
+    for (let n = 0; n < count; n++) {
+      const sum = pool.reduce((s, x) => s + x.w, 0);
+      let r = rng() * sum;
+      let idx = pool.length - 1;
+      for (let i = 0; i < pool.length; i++) {
+        r -= pool[i].w;
+        if (r <= 0) {
+          idx = i;
+          break;
+        }
+      }
+      picked.push(pool[idx].t);
+      pool.splice(idx, 1);
     }
-    return copy.slice(0, count);
+    return picked;
   }
 }
 
@@ -251,15 +318,28 @@ export class StateEvaluator {
     const [flex, isolated, jokers] = rackShape(rack);
     addTerm(score, "flexibility", 0.55 * flex);
     addTerm(score, "isolated", -2.8 * isolated);
-    addTerm(score, "joker_reserve", 16 * jokers);
+    addTerm(score, "joker_reserve", 28 * jokers);
     const tableFlex = tableFlexibility(table);
     addTerm(score, "table_flexibility", 0.9 * tableFlex);
     addTerm(score, "future_move_potential", 0.4 * (flex + tableFlex * 0.15 + jokers * 2));
     const minOpp = Math.min(...view.rackSizes.filter((_, i) => i !== view.playerId));
     addTerm(score, "race", -3.5 * Math.max(0, n - minOpp));
+    const raceCritical = minOpp <= 2;
     if (belief && played.length) {
-      const gift = played.reduce((s, t) => s + belief.heat(t), 0);
-      addTerm(score, "opponent_blocking", (minOpp <= 6 ? -4.2 : -1.3) * gift);
+      const added = addedOpenSlots(view.table, table);
+      const heat = added.reduce((s, slot) => s + Math.max(0, belief.heatSlot(slot.color, slot.rank)), 0);
+      const base = added.length * (minOpp <= 6 ? -17 : -4);
+      addTerm(score, "opponent_blocking", base + (minOpp <= 6 ? -6.5 : -1.8) * heat);
+    }
+    if (played.length && !raceCritical) {
+      const connectors = selfConnectors(played, rack);
+      if (connectors) addTerm(score, "self_connectors", -22 * connectors);
+    }
+    if (played.some(isJoker) && n > 3 && !raceCritical) {
+      addTerm(score, "joker_spend", -24);
+    }
+    if (played.length && !view.hasInitialMeld[view.playerId]) {
+      scoreOpening(score, view, table, played, minOpp);
     }
     return score;
   }
@@ -289,6 +369,61 @@ function rackShape(rack: Tile[]): [number, number, number] {
     else isolated += 1;
   }
   return [flexible, isolated, jokers];
+}
+
+function leftoverIndex(rack: Tile[]) {
+  const byColor = new Map<number, Set<number>>();
+  const byRank = new Map<number, Set<number>>();
+  for (const t of rack) {
+    if (isJoker(t)) continue;
+    const c = tileColor(t);
+    const r = tileRank(t);
+    if (!byColor.has(c)) byColor.set(c, new Set());
+    byColor.get(c)!.add(r);
+    if (!byRank.has(r)) byRank.set(r, new Set());
+    byRank.get(r)!.add(c);
+  }
+  return { byColor, byRank };
+}
+
+function selfConnectors(played: Tile[], leftover: Tile[]): number {
+  const { byColor, byRank } = leftoverIndex(leftover);
+  let n = 0;
+  for (const t of played) {
+    if (isJoker(t)) continue;
+    const color = tileColor(t);
+    const rank = tileRank(t);
+    const colors = byColor.get(color);
+    if (colors?.has(prevRank(rank)) && colors.has(nextRank(rank))) n += 1;
+    const groupColors = byRank.get(rank)?.size ?? 0;
+    if (groupColors >= 2) n += 1;
+  }
+  return n;
+}
+
+function openingPoints(table: Table, played: Tile[]): number {
+  const used = new Set(played.map((t) => t.id));
+  return table.melds
+    .filter((meld) => meld.tiles.some((t) => used.has(t.id)))
+    .reduce((s, meld) => s + pointValue(meld), 0);
+}
+
+function scoreOpening(
+  score: ScoreBreakdown,
+  view: PlayerView,
+  table: Table,
+  played: Tile[],
+  minOpp: number,
+): void {
+  const points = openingPoints(table, played);
+  addTerm(score, "opening_quality", 2.2 * Math.max(0, points - 30) + 1.5 * Math.max(0, played.length - 3));
+  const weak = points <= 33;
+  const canWait = minOpp >= 8 && view.poolSize > 10;
+  if (minOpp <= 4 || view.poolSize <= 8) {
+    addTerm(score, "force_open", 18);
+  } else if (weak && canWait) {
+    addTerm(score, "wait_to_open", -120);
+  }
 }
 
 function tableFlexibility(table: Table): number {
@@ -360,8 +495,12 @@ export class RummyBot {
     const cfg = CONFIGS[diff];
     const started = performance.now();
     const deadline = started + cfg.timeLimitMs;
+    const plyReserve =
+      cfg.searchDepth >= 3 ? Math.min(340, cfg.timeLimitMs * 0.34) :
+      cfg.searchDepth >= 2 ? Math.min(170, cfg.timeLimitMs * 0.34) :
+      0;
     const opened = view.hasInitialMeld[view.playerId];
-    const configs = this.collectConfigs(view, cfg, opened, deadline);
+    const configs = this.collectConfigs(view, cfg, opened, deadline - plyReserve);
     const belief = cfg.useOpponentModel
       ? OpponentModel.fromView(view, cfg.opponentModelAccuracy)
       : null;
@@ -374,13 +513,13 @@ export class RummyBot {
       cacheHits += config.cacheHits;
     }
     let simulations = 0;
-    if (cfg.useMonteCarlo && scored.length && performance.now() < deadline) {
+    if (cfg.searchDepth >= 2 && cfg.useMonteCarlo && scored.length && performance.now() < deadline) {
       simulations = this.lookahead(view, scored, cfg, belief, rng, deadline);
     }
     scored.push(["DRAW", null, this.evaluator.evaluateDraw(view, belief)]);
     const goingOut = scored.filter((item) => item[0] === "PLAY" && item[1] && item[1].rackLeft.length === 0);
     const pool = goingOut.length ? goingOut : scored;
-    const [chosenAction, chosenConfig, chosenBreak] = this.select(pool, cfg, rng, view.poolSize);
+    const [chosenAction, chosenConfig, chosenBreak] = this.select(pool, cfg, rng, view.poolSize, opened);
     const elapsed = performance.now() - started;
     const top = [...scored].sort((a, b) => b[2].total - a[2].total).slice(0, 10);
     const usedStr = chosenConfig ? chosenConfig.rackUsed.map(tileStr).join(" ") : "";
@@ -495,17 +634,20 @@ export class RummyBot {
     cfg: DifficultyConfig,
     rng: SeededRng,
     poolSize: number,
+    opened: boolean,
   ): [string, TableConfiguration | null, ScoreBreakdown] {
     let ranked = [...scored].sort((a, b) => b[2].total - a[2].total);
     const plays = ranked.filter((i) => i[0] === "PLAY");
     const draws = ranked.filter((i) => i[0] === "DRAW");
     const slack = 8 + 40 * cfg.randomness;
     if (plays.length) {
-      ranked = poolSize === 0 ? plays : ranked;
-      if (poolSize !== 0) {
+      if (poolSize === 0) {
+        ranked = plays;
+      } else {
         const bestPlay = plays[0][2].total;
         const bestDraw = draws[0]?.[2].total ?? -Infinity;
-        if (bestPlay >= bestDraw - slack) ranked = plays;
+        const waiting = !opened && "wait_to_open" in plays[0][2].terms;
+        if (!waiting && bestPlay >= bestDraw - slack) ranked = plays;
       }
     }
     const bestScore = ranked[0][2].total;
@@ -534,42 +676,44 @@ export class RummyBot {
     plays.sort((a, b) => b[2].total - a[2].total);
     plays = plays.slice(0, cfg.lookaheadTop);
     if (!plays.length || !belief) return 0;
-    const oppId = view.rackSizes
+    const oppSize = view.rackSizes
       .map((size, i) => ({ size, i }))
       .filter((x) => x.i !== view.playerId)
-      .sort((a, b) => a.size - b.size)[0].i;
-    const oppSize = view.rackSizes[oppId];
+      .sort((a, b) => a.size - b.size)[0].size;
     const samples = Math.max(1, Math.floor(cfg.simulationCount / Math.max(1, plays.length)));
-    let used = 0;
-    for (const item of plays) {
-      if (performance.now() >= deadline) break;
-      let gift = 0;
-      for (let s = 0; s < samples; s++) {
-        const sample = belief.sampleHidden(oppSize, () => rng.next());
-        gift += sample.filter((t) => canAttach(t, item[1]!.table)).length;
-        used += 1;
+    const perSolveMs = cfg.searchDepth >= 3 ? 25 : 18;
+    const racks: Tile[][] = [];
+    for (let s = 0; s < samples; s++) {
+      if (performance.now() + perSolveMs > deadline) break;
+      racks.push(belief.sampleHidden(oppSize, () => rng.next()));
+    }
+    if (!racks.length) return 0;
+    const dumpOn = (table: Table): [number, number] => {
+      let tiles = 0;
+      let n = 0;
+      for (const sample of racks) {
+        if (performance.now() + perSolveMs > deadline) break;
+        const replies = this.solver.solve(table, sample, {
+          mode: "add_only",
+          minRackPlayed: 1,
+          maxConfigs: 8,
+          timeLimitMs: perSolveMs,
+        });
+        tiles += replies[0]?.rackUsed.length ?? 0;
+        n += 1;
       }
-      addTerm(item[2], "simulated_opponent_replies", -3.1 * (gift / samples));
+      return [n ? tiles / n : 0, n];
+    };
+    const [baseline, baselineN] = dumpOn(view.table);
+    if (!baselineN) return 0;
+    let used = baselineN;
+    for (const item of plays) {
+      if (performance.now() + perSolveMs > deadline) break;
+      const [gifted, n] = dumpOn(item[1]!.table);
+      used += n;
+      if (n) addTerm(item[2], "simulated_opponent_replies", -24 * (gifted - baseline));
     }
-    centerLookahead(plays);
     return used;
-  }
-}
-
-function centerLookahead(plays: [string, TableConfiguration | null, ScoreBreakdown][]): void {
-  const keyed = plays.filter((i) => "simulated_opponent_replies" in i[2].terms);
-  if (keyed.length < 2) {
-    if (keyed[0]) {
-      const bd = keyed[0][2];
-      bd.total -= bd.terms.simulated_opponent_replies;
-      bd.terms.simulated_opponent_replies = 0;
-    }
-    return;
-  }
-  const mean = keyed.reduce((s, i) => s + i[2].terms.simulated_opponent_replies, 0) / keyed.length;
-  for (const item of keyed) {
-    item[2].terms.simulated_opponent_replies -= mean;
-    item[2].total -= mean;
   }
 }
 
@@ -598,24 +742,6 @@ function mergeConfigs(first: TableConfiguration[], second: TableConfiguration[])
     merged.push(config);
   }
   return merged;
-}
-
-function canAttach(tile: Tile, table: Table): boolean {
-  if (isJoker(tile)) return true;
-  const color = tileColor(tile);
-  const rank = tileRank(tile);
-  for (const meld of table.melds) {
-    const slots = represented(meld);
-    if (meld.kind === RUN) {
-      if (slots[0][0] !== color) continue;
-      const order = runDisplayOrder(slots.map((s) => s[1]));
-      if (rank === prevRank(order[0]) || rank === nextRank(order[order.length - 1])) return true;
-    } else {
-      const used = new Set(slots.map((s) => s[0]));
-      if (slots[0][1] === rank && !used.has(color) && slots.length === 3) return true;
-    }
-  }
-  return false;
 }
 
 function formatDecision(d: BotDecision): string {

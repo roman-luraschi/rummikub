@@ -48,6 +48,7 @@ function eventToData(event: PublicEvent, names: string[], isBot: boolean[]) {
     tableHash: event.tableHash,
     rackSize: event.rackSize,
     drawn: event.drawn,
+    openSlots: event.openSlots,
   };
 }
 

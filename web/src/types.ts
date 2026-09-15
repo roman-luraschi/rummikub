@@ -43,6 +43,7 @@ export type GameView = {
     tableHash: string;
     rackSize: number;
     drawn: boolean;
+    openSlots?: { color: number; rank: number }[];
   }[];
 };
 
@@ -78,6 +79,7 @@ export type GameEvent = {
   tableHash: string;
   rackSize: number;
   drawn: boolean;
+  openSlots?: { color: number; rank: number }[];
 };
 
 export type GameStep = {

@@ -19,8 +19,11 @@ Abrí `http://127.0.0.1:5173`. El bot corre en un worker de la pestaña.
 ```powershell
 cd web
 npm test
-npm run bench -- --a easy --b extreme --games 40 --seed 99
+npm run bench -- hard easy 8 1
+npm run bench -- extreme hard 12 1
 ```
+
+En Windows, `npm run bench -- --a extreme` se come los flags; pasá `dificultadA dificultadB juegos seed` como argumentos posicionales. Hard debería ganar la mayoría vs Easy. Extreme vs Hard es más lento (~15s por partida) y sirve para ver si Extreme se separa; si no, hay que subir el peso del ply, no el reloj.
 
 Dificultades: `easy`, `normal`, `hard`, `very_hard`, `extreme`.
 

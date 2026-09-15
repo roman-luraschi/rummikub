@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CONFIGS, RummyBot, SeededRng } from "../bot";
+import { CONFIGS, OpponentModel, openSlots, RummyBot, SeededRng } from "../bot";
 import { GameEngine } from "../game";
 import { parseTiles, tileStr } from "../tile";
 import { group, run, tableOf, viewOf } from "./helpers";
@@ -71,6 +71,91 @@ test("hard dumps then rearranges in the same turn", { timeout: 15000 }, () => {
 test("easy and hard use different solver modes", () => {
   assert.equal(CONFIGS.easy.solverMode, "add_only");
   assert.equal(CONFIGS.hard.solverMode, "full");
+  assert.equal(CONFIGS.hard.searchDepth, 1);
+  assert.equal(CONFIGS.very_hard.searchDepth, 2);
+  assert.equal(CONFIGS.extreme.searchDepth, 3);
+  assert.equal(CONFIGS.hard.useMonteCarlo, false);
+  assert.equal(CONFIGS.extreme.useMonteCarlo, true);
   assert.ok(CONFIGS.extreme.timeLimitMs > CONFIGS.easy.timeLimitMs);
   assert.ok(CONFIGS.easy.randomness > CONFIGS.extreme.randomness);
+});
+
+test("draw inference cools the slots the opponent passed on", () => {
+  const table = tableOf(run("2R 3R 4R"));
+  const view = viewOf("1A", {
+    table,
+    rackSizes: [1, 14],
+    history: [
+      {
+        playerId: 1,
+        type: "draw",
+        tilesFromRack: [],
+        tableHash: "x",
+        rackSize: 14,
+        drawn: true,
+        openSlots: openSlots(table),
+      },
+    ],
+  });
+  const model = OpponentModel.fromView(view, 1);
+  const five = parseTiles("5R")[0];
+  const twelve = parseTiles("12A")[0];
+  assert.ok(model.heat(five) < model.heat(twelve));
+  assert.ok(model.heat(five) < 0);
+});
+
+test("extreme prefers not to feed an obvious attach", { timeout: 15000 }, () => {
+  const view = viewOf(parseTiles("5R 11B 1A 12N"), {
+    table: tableOf(run("2R 3R 4R"), run("8B 9B 10B")),
+    rackSizes: [4, 5],
+    poolSize: 20,
+    difficulties: ["extreme", "easy"],
+    history: [
+      {
+        playerId: 1,
+        type: "play",
+        tilesFromRack: parseTiles("7R 7R 8R"),
+        tableHash: "x",
+        rackSize: 8,
+        drawn: false,
+      },
+    ],
+  });
+  const move = new RummyBot().chooseMove(view, "extreme", true, new SeededRng(3));
+  assert.ok(move.config);
+  const used = move.config.rackUsed.map(tileStr);
+  assert.ok(used.includes("11B"));
+  const eleven = move.decision.topCandidates.find((c) => c.rackUsed === "11B");
+  const five = move.decision.topCandidates.find((c) => c.rackUsed === "5R");
+  assert.ok(eleven, "11B should be a candidate");
+  assert.ok(five, "5R should be a candidate");
+  assert.ok(eleven.score > five.score, "quiet extension should outrank the hot gift");
+});
+
+test("weak opening waits when the opponent is far", { timeout: 15000 }, () => {
+  const rack = parseTiles("9R 10R 11R 1B 3N 5A 7B 8N 2A 4N 12N 13B 1N 6A");
+  const view = viewOf(rack, {
+    table: tableOf(),
+    hasInitialMeld: [false, true],
+    rackSizes: [14, 14],
+    poolSize: 40,
+    difficulties: ["extreme", "easy"],
+  });
+  const move = new RummyBot().chooseMove(view, "extreme", false, new SeededRng(4));
+  assert.equal(move.action, "DRAW");
+  assert.equal(move.config, null);
+});
+
+test("weak opening is forced when the opponent is short", { timeout: 15000 }, () => {
+  const rack = parseTiles("9R 10R 11R 1B 3N 5A 7B 8N 2A 4N 12N 13B 1N 6A");
+  const view = viewOf(rack, {
+    table: tableOf(),
+    hasInitialMeld: [false, true],
+    rackSizes: [14, 3],
+    poolSize: 40,
+    difficulties: ["extreme", "easy"],
+  });
+  const move = new RummyBot().chooseMove(view, "extreme", false, new SeededRng(4));
+  assert.ok(move.config);
+  assert.ok(move.config.rackUsed.some((t) => tileStr(t) === "9R"));
 });

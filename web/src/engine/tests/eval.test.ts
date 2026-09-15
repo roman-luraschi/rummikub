@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RummyBot, SeededRng, StateEvaluator } from "../bot";
-import { makeGroup, makeRun } from "../validator";
-import { BLACK, BLUE, ORANGE, RED, jokerTile, numberedTile, parseTiles } from "../tile";
+import { OpponentModel, RummyBot, SeededRng, StateEvaluator } from "../bot";
+import { makeGroup, makeRun, tryMakeMeld } from "../validator";
+import { BLACK, BLUE, ORANGE, RED, jokerTile, numberedTile, parseTiles, tileStr } from "../tile";
 import { configOf, group, run, tableOf, viewOf } from "./helpers";
 
 test("going out dominates", () => {
@@ -29,6 +29,54 @@ test("flexible hand beats isolated at same size", () => {
   const isoScore = evaluator.evaluateView(viewOf("13R 1B 12N 2A 10B 11N 3A 9N"));
   assert.ok(flexScore.total > isoScore.total);
   assert.ok(flexScore.terms.flexibility > isoScore.terms.flexibility);
+});
+
+test("gifting a hot run end scores worse than a quiet extension", () => {
+  const evaluator = new StateEvaluator();
+  const table = tableOf(run("2R 3R 4R"), run("8B 9B 10B"));
+  const rack = parseTiles("5R 11B");
+  const view = viewOf(rack, { table, rackSizes: [2, 4], poolSize: 20 });
+  const belief = OpponentModel.fromView(view, 1);
+  belief.addHeat(RED, 6, 8);
+  const gift = configOf(tableOf(run("2R 3R 4R 5R"), run("8B 9B 10B")), [rack[0]], [rack[1]]);
+  const safe = configOf(tableOf(run("2R 3R 4R"), run("8B 9B 10B 11B")), [rack[1]], [rack[0]]);
+  const giftScore = evaluator.evaluatePlay(view, gift, belief);
+  const safeScore = evaluator.evaluatePlay(view, safe, belief);
+  assert.ok(safeScore.total > giftScore.total);
+  assert.ok((giftScore.terms.opponent_blocking ?? 0) < (safeScore.terms.opponent_blocking ?? 0));
+});
+
+test("dumping a connector from your own set scores worse than keeping it", () => {
+  const evaluator = new StateEvaluator();
+  const table = tableOf(run("2R 3R 4R"), run("8B 9B 10B"));
+  const rack = parseTiles("4R 5R 6R 11B");
+  const five = rack.find((t) => tileStr(t) === "5R")!;
+  const eleven = rack.find((t) => tileStr(t) === "11B")!;
+  const leftoverDump = rack.filter((t) => t.id !== five.id);
+  const leftoverKeep = rack.filter((t) => t.id !== eleven.id);
+  const view = viewOf(rack, { table, rackSizes: [4, 10], poolSize: 20 });
+  const dump = configOf(tableOf(run("2R 3R 4R 5R"), run("8B 9B 10B")), [five], leftoverDump);
+  const keep = configOf(tableOf(run("2R 3R 4R"), run("8B 9B 10B 11B")), [eleven], leftoverKeep);
+  const dumpScore = evaluator.evaluatePlay(view, dump);
+  const keepScore = evaluator.evaluatePlay(view, keep);
+  assert.ok(keepScore.total > dumpScore.total);
+  assert.ok((dumpScore.terms.self_connectors ?? 0) < 0);
+});
+
+test("spending the only joker with a long leftover loses to a numbered extension", () => {
+  const evaluator = new StateEvaluator();
+  const table = tableOf(run("2R 3R 4R"));
+  const rack = parseTiles("J 5R 1B 8N 12A 3A 9B 11N 13A");
+  const joker = rack[0];
+  const five = rack.find((t) => tileStr(t) === "5R")!;
+  const view = viewOf(rack, { table, rackSizes: [9, 10], poolSize: 20 });
+  const jokerMeld = tryMakeMeld([...table.melds[0].tiles, joker]);
+  const spend = configOf({ melds: [jokerMeld] }, [joker], rack.filter((t) => t.id !== joker.id));
+  const numbered = configOf(tableOf(run("2R 3R 4R 5R")), [five], rack.filter((t) => t.id !== five.id));
+  const spendScore = evaluator.evaluatePlay(view, spend);
+  const numberedScore = evaluator.evaluatePlay(view, numbered);
+  assert.ok(numberedScore.total > spendScore.total);
+  assert.ok((spendScore.terms.joker_spend ?? 0) < 0);
 });
 
 test("dumping a ready meld beats drawing", { timeout: 20000 }, () => {

@@ -6,9 +6,34 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-function arg(flag: string, fallback: string): string {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+function parseBenchArgs(argv: string[]): { a: string; b: string; games: number; seed: number } {
+  const script = argv.findIndex((tok) => /bench\.ts$/i.test(tok.replace(/\\/g, "/")));
+  const raw = script >= 0 ? argv.slice(script + 1) : argv.slice(2);
+  let a = "easy";
+  let b = "hard";
+  let games = 10;
+  let seed = 1;
+  const positional: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const tok = raw[i];
+    const next = raw[i + 1];
+    if ((tok === "--a" || tok === "--b" || tok === "--games" || tok === "--seed") && next && !next.startsWith("-")) {
+      if (tok === "--a") a = next;
+      else if (tok === "--b") b = next;
+      else if (tok === "--games") games = Number(next);
+      else seed = Number(next);
+      i += 1;
+    } else if (!tok.startsWith("-")) {
+      positional.push(tok);
+    }
+  }
+  if (positional[0]) a = positional[0];
+  if (positional[1]) b = positional[1];
+  if (positional[2]) games = Number(positional[2]);
+  if (positional[3]) seed = Number(positional[3]);
+  if (!Number.isFinite(games) || games < 1) throw new Error(`Invalid games: ${games}`);
+  if (!Number.isFinite(seed)) throw new Error(`Invalid seed: ${seed}`);
+  return { a, b, games, seed };
 }
 
 function playGame(difficulties: string[], seed: number, maxTurns = 180) {
@@ -60,10 +85,7 @@ function runMatch(a: string, b: string, games: number, seed: number) {
   return { a, b, games, wins, avgTurns: mean(turnCounts), avgMs: mean(avgMs) };
 }
 
-const a = arg("--a", "easy");
-const b = arg("--b", "hard");
-const games = Number(arg("--games", "10"));
-const seed = Number(arg("--seed", "1"));
+const { a, b, games, seed } = parseBenchArgs(process.argv);
 
 console.log(
   `Self-play ${a} vs ${b}  games=${games}  seed=${seed}  (Extreme puede tardar ~15s por partida; no está colgado.)`,
