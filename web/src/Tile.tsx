@@ -17,10 +17,24 @@ type Props = {
   dragging?: boolean;
 };
 
+function JokerIcon() {
+  return (
+    <svg className="rk-joker-icon" viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="11" cy="16" r="5.5" />
+      <path d="M11 21c-2 10 6 16 18 20l3-5C20 32 16 26 15 21z" />
+      <circle cx="53" cy="16" r="5.5" />
+      <path d="M53 21c2 10-6 16-18 20l-3-5c12-4 16-10 15-15z" />
+      <circle cx="32" cy="6" r="5.5" />
+      <path d="M32 11 25 40h14L32 11z" />
+      <rect x="17" y="40" width="30" height="8" rx="3" />
+    </svg>
+  );
+}
+
 function resolveFace(tile: TileData, binding?: JokerBindingData) {
   if (tile.isJoker) {
     return {
-      rank: binding ? String(binding.rank) : "☺",
+      rank: binding ? String(binding.rank) : "",
       color: binding?.color ?? "joker",
       joker: true,
     };
@@ -73,7 +87,7 @@ export default function TileView({
   const inner = (
     <>
       <span className="rk-tile-shine" />
-      <span className="rk-tile-rank">{face.rank}</span>
+      {face.joker && !binding ? <JokerIcon /> : <span className="rk-tile-rank">{face.rank}</span>}
       {face.joker && <span className="rk-tile-joker">JOKER</span>}
     </>
   );

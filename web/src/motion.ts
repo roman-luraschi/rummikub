@@ -40,13 +40,25 @@ export function elementTopLeft(selector: string, fallback?: { x: number; y: numb
   return { x: box.left, y: box.top };
 }
 
+function tileHalf() {
+  const tile = document.querySelector<HTMLElement>(".tile-probe") ?? document.querySelector<HTMLElement>(".rk-tile-md");
+  if (!tile) return { x: 27, y: 37 };
+  const box = tile.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) return { x: 27, y: 37 };
+  return { x: box.width / 2, y: box.height / 2 };
+}
+
 export function anchorPoint(selector: string, fallback?: { x: number; y: number }) {
+  const half = tileHalf();
   const el = document.querySelector(selector);
   if (!el) {
-    return fallback ?? { x: window.innerWidth / 2 - 27, y: window.innerHeight / 3 };
+    return fallback ?? { x: window.innerWidth / 2 - half.x, y: window.innerHeight / 3 };
   }
   const box = el.getBoundingClientRect();
-  return { x: box.left + box.width / 2 - 27, y: box.top + box.height / 2 - 37 };
+  return {
+    x: box.left + box.width / 2 - half.x,
+    y: box.top + box.height / 2 - half.y,
+  };
 }
 
 export function tilePoint(tileId: number) {

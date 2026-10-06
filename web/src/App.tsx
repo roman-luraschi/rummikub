@@ -40,8 +40,20 @@ import type { GamePayload, GameStep, TileData } from "./types";
 
 const EXTREME_TURN_SECONDS = 60;
 
-function FaceDownRow({ count, compact, anchor }: { count: number; compact?: boolean; anchor?: string }) {
-  const n = Math.min(count, compact ? 10 : 14);
+const actionBtn = "w-full sm:w-auto";
+
+function FaceDownRow({
+  count,
+  compact,
+  stacked,
+  anchor,
+}: {
+  count: number;
+  compact?: boolean;
+  stacked?: boolean;
+  anchor?: string;
+}) {
+  const n = Math.min(count, stacked ? 3 : compact ? 10 : 14);
   return (
     <div className="facedown-row" aria-label={`${count} fichas ocultas`} data-anchor={anchor}>
       {Array.from({ length: n }, (_, i) => (
@@ -49,7 +61,7 @@ function FaceDownRow({ count, compact, anchor }: { count: number; compact?: bool
           <TileView tile={{ id: -i, isJoker: false, label: "", color: "black", rank: 0 }} faceDown size="sm" />
         </div>
       ))}
-      {count > n && <span className="facedown-more">+{count - n}</span>}
+      {!stacked && count > n && <span className="ml-2 text-[13px] opacity-75">+{count - n}</span>}
     </div>
   );
 }
@@ -645,25 +657,27 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
+    <div className="mx-auto w-full max-w-[1280px] px-3 pt-4 pb-8 sm:px-[18px] sm:pt-[18px] sm:pb-10">
+      <header className="mb-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
           <span className="brand-mark">R</span>
           <div>
-            <p className="kicker">Rummikub</p>
-            <h1>Mesa de juego</h1>
+            <p className="m-0 text-[11px] font-extrabold uppercase tracking-[0.16em] opacity-70">Rummikub</p>
+            <h1 className="font-display text-2xl leading-none">Mesa de juego</h1>
           </div>
         </div>
         {view && (
-          <div className="hud">
-            <span>Seed {view.seed}</span>
-            <span>Pozo {view.poolSize}</span>
-            <span className={game?.yourTurn ? "hud-turn" : ""}>{status}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">Seed {view.seed}</span>
+            <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">Pozo {view.poolSize}</span>
+            <span className={`hud-chip rounded-2xl px-3 py-2.5 text-sm ${game?.yourTurn ? "font-extrabold text-gold" : ""}`}>
+              {status}
+            </span>
           </div>
         )}
       </header>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="mb-2 text-[#ffb4a8]">{error}</p>}
       {banner && <div className="turn-banner">{banner}</div>}
       {flights.length > 0 && (
         <div className="fly-layer" aria-hidden>
@@ -685,13 +699,13 @@ export default function App() {
       )}
 
       {view && (
-        <div className="table-scene">
-          <div className="opponents">
+        <div>
+          <div className="mb-3.5 grid grid-cols-1 gap-3 md:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
             {opponents.map(({ name, i }) => (
-              <article key={name} className={view.current === i ? "is-active" : ""}>
-                <div className="opp-meta">
-                  <h3>{name}</h3>
-                  <p>
+              <article key={name} className={`opp-card${view.current === i ? " is-active" : ""}`}>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="font-display text-base">{name}</h3>
+                  <p className="m-0 text-[13px] opacity-80">
                     {view.rackSizes[i]} fichas · {view.hasInitialMeld[i] ? "en juego" : "sin abrir"} · {view.difficulties[i]}
                   </p>
                 </div>
@@ -702,35 +716,42 @@ export default function App() {
                 />
               </article>
             ))}
-            <article className="pool-card">
-              <h3>Pozo</h3>
-              <p>{view.poolSize} fichas</p>
-              <FaceDownRow
-                count={Math.max(0, Math.min(view.poolSize, 8) - (hideFrom?.pool ? hideFrom.count : 0))}
-                compact
-                anchor="pool"
-              />
+            <article className="flex flex-col items-center justify-center gap-2 py-1">
+              <div className="text-center">
+                <h3 className="font-display text-base">Pozo</h3>
+                <p className="m-0 text-[13px] opacity-80">{view.poolSize} fichas</p>
+              </div>
+              <div className="pool-well">
+                <FaceDownRow
+                  count={Math.max(0, view.poolSize - (hideFrom?.pool ? hideFrom.count : 0))}
+                  stacked
+                  anchor="pool"
+                />
+              </div>
             </article>
           </div>
 
-          <div className="felt-frame">
+          <div className="wood-frame rounded-[28px] p-3 sm:p-[22px]">
             <div
-              className={`felt-board${hover?.place === "felt" ? " is-hot" : ""}${drag ? " is-droppable" : ""}`}
+              className={`felt-board felt-surface min-h-60 sm:min-h-[340px] ${hover?.place === "felt" ? "is-hot" : ""} ${drag ? "is-droppable" : ""}`}
               data-anchor="felt"
               data-drop="felt"
             >
               <div className="felt-grain" />
+              <div className="rk-tile rk-tile-md tile-probe" aria-hidden />
               {piles.length === 0 ? (
-                <div className="felt-empty">
-                  <p>{drag ? "Soltá acá para un juego nuevo" : "La mesa está vacía"}</p>
-                  <span>
+                <div className="grid min-h-[200px] place-content-center px-3 text-center opacity-90 sm:min-h-[280px]">
+                  <p className="m-0 mb-2 text-xl font-extrabold sm:text-[28px]">
+                    {drag ? "Soltá acá para un juego nuevo" : "La mesa está vacía"}
+                  </p>
+                  <span className="text-sm sm:text-base">
                     {canAct
                       ? "Arrastrá fichas al paño. Hasta confirmar el turno podés bajar más y rearmar."
                       : "Las combinaciones bajadas van a aparecer acá, en el paño."}
                   </span>
                 </div>
               ) : (
-                <div className="felt-melds">
+                <div className="flex flex-wrap content-start gap-x-8 gap-y-7">
                   {piles.map((pile, pileIndex) => {
                     const status = classifyPile(pile.tiles);
                     const pileHot = hover?.place === "pile" && hover.pile === pileIndex;
@@ -786,18 +807,20 @@ export default function App() {
             </div>
           </div>
 
-          <section className="rack-dock">
-            <div className="rack-head">
+          <section className="mt-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="rack-title">
-                  <h2>{spectator ? `Atril de ${view.names[view.playerId]}` : "Tu atril"}</h2>
+                <div className="flex items-baseline gap-3">
+                  <h2 className="font-display text-xl sm:text-2xl">
+                    {spectator ? `Atril de ${view.names[view.playerId]}` : "Tu atril"}
+                  </h2>
                   {timedTurn && turnLeft != null && (
                     <span className={`rack-clock${turnLeft <= 10 ? " is-low" : ""}`}>
                       {Math.ceil(turnLeft)}s
                     </span>
                   )}
                 </div>
-                <p>
+                <p className="m-0 mt-1 text-sm opacity-75">
                   {rackTiles.length} fichas
                   {spectator
                     ? " · partida automática entre bots"
@@ -806,7 +829,7 @@ export default function App() {
                       : " · apertura: 30 puntos, sin comodín ni tocar la mesa"}
                 </p>
               </div>
-              {busy && <span className="busy">{banner || "Pensando…"}</span>}
+              {busy && <span className="font-extrabold text-gold">{banner || "Pensando…"}</span>}
             </div>
             <div className={`wooden-rack${hover?.place === "rack" ? " is-hot" : ""}`} data-drop="rack">
               <div className="rack-rail" />
@@ -829,30 +852,34 @@ export default function App() {
                 ))}
               </div>
             </div>
-            <div className="actions">
+            <div className="mt-3 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
               {spectator ? (
                 <>
-                  <button className="primary" disabled={busy || view.over} onClick={() => setAutoplay((on) => !on)}>
+                  <button className={`primary ${actionBtn}`} disabled={busy || view.over} onClick={() => setAutoplay((on) => !on)}>
                     {autoplay && !view.over ? "Pausar" : "Reanudar"}
                   </button>
-                  <button disabled={busy || view.over || autoplay} onClick={() => void onTick()}>
+                  <button className={actionBtn} disabled={busy || view.over || autoplay} onClick={() => void onTick()}>
                     Siguiente jugada
                   </button>
                 </>
               ) : (
                 <>
-                  <button className="primary" disabled={!canAct || (!canConfirm && selected.length === 0)} onClick={onPlay}>
+                  <button
+                    className={`primary ${actionBtn}`}
+                    disabled={!canAct || (!canConfirm && selected.length === 0)}
+                    onClick={onPlay}
+                  >
                     {canConfirm ? "Confirmar turno" : "Bajar al paño"}
                   </button>
-                  <button disabled={!canAct || dirty} onClick={onDraw}>
+                  <button className={actionBtn} disabled={!canAct || dirty} onClick={onDraw}>
                     Robar del pozo
                   </button>
-                  <button disabled={!canAct || !dirty} onClick={resetTable}>
+                  <button className={actionBtn} disabled={!canAct || !dirty} onClick={resetTable}>
                     Deshacer mesa
                   </button>
                 </>
               )}
-              <button className="ghost" onClick={resetToLobby}>
+              <button className={`ghost ${actionBtn}`} onClick={resetToLobby}>
                 Nueva partida
               </button>
             </div>
