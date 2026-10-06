@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { createGame, drawTile, playTiles, previewPlay, tickGame } from "./localApi";
 import {
@@ -14,6 +14,7 @@ import {
   type FlyPiece,
 } from "./motion";
 import ResultModal from "./ResultModal";
+import StartMenu, { type GameSetup } from "./StartMenu";
 import TileView from "./Tile";
 import {
   applyDrop,
@@ -35,15 +36,7 @@ import {
   type DropTarget,
   type Pile,
 } from "./tableDraft";
-import type { BotDecision, GamePayload, GameStep, TileData } from "./types";
-
-const DIFFICULTIES = [
-  { id: "easy", label: "Easy" },
-  { id: "normal", label: "Normal" },
-  { id: "hard", label: "Hard" },
-  { id: "very_hard", label: "Very Hard" },
-  { id: "extreme", label: "Extreme" },
-];
+import type { GamePayload, GameStep, TileData } from "./types";
 
 const EXTREME_TURN_SECONDS = 60;
 
@@ -61,38 +54,14 @@ function FaceDownRow({ count, compact, anchor }: { count: number; compact?: bool
   );
 }
 
-function DebugPanel({ decision }: { decision: BotDecision }) {
-  return (
-    <aside className="debug">
-      <h2>Por qué jugó el bot</h2>
-      <p className="debug-action">{decision.action}</p>
-      <p className="debug-meta">
-        {decision.score.toFixed(1)} pts · {decision.timeMs.toFixed(0)} ms · {decision.statesEvaluated} estados
-      </p>
-      <ul>
-        {Object.entries(decision.reasons).map(([name, value]) => (
-          <li key={name}>
-            <span>{name.replaceAll("_", " ")}</span>
-            <strong>
-              {value >= 0 ? "+" : ""}
-              {value.toFixed(1)}
-            </strong>
-          </li>
-        ))}
-      </ul>
-    </aside>
-  );
-}
-
 export default function App() {
-  const [setup, setSetup] = useState({
-    mode: "play" as "play" | "spectate",
+  const [setup, setSetup] = useState<GameSetup>({
+    mode: "play",
     difficulty: "hard",
     opponents: 1,
     botCount: 2,
     botDifficulties: ["hard", "hard"],
     seed: "",
-    debug: false,
   });
   const [game, setGame] = useState<GamePayload | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
@@ -450,15 +419,14 @@ export default function App() {
     }
   }
 
-  async function onStart(event: FormEvent) {
-    event.preventDefault();
+  async function onStart() {
     playGen.current += 1;
     setAutoplay(setup.mode === "spectate");
     await withBusy(async () => {
       const payload = await createGame({
         difficulty: setup.difficulty,
         opponents: setup.opponents,
-        debug: setup.debug,
+        debug: false,
         seed: setup.seed ? Number(setup.seed) : undefined,
         spectator: setup.mode === "spectate",
         botCount: setup.botCount,
@@ -662,6 +630,20 @@ export default function App() {
     .map((name, i) => ({ name, i }))
     .filter((item) => item.i !== view.playerId) ?? [];
 
+  if (!game) {
+    return (
+      <StartMenu
+        setup={setup}
+        onChange={setSetup}
+        busy={busy}
+        error={error}
+        onStart={() => {
+          void onStart();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -680,117 +662,6 @@ export default function App() {
           </div>
         )}
       </header>
-
-      {!game && (
-        <form className="setup" onSubmit={onStart}>
-          <div className="mode-switch">
-            <button
-              type="button"
-              className={setup.mode === "play" ? "is-on" : ""}
-              onClick={() => setSetup({ ...setup, mode: "play" })}
-            >
-              Jugar
-            </button>
-            <button
-              type="button"
-              className={setup.mode === "spectate" ? "is-on" : ""}
-              onClick={() => setSetup({ ...setup, mode: "spectate" })}
-            >
-              Bots vs bots
-            </button>
-          </div>
-          {setup.mode === "play" ? (
-            <>
-              <label>
-                Dificultad del bot
-                <select
-                  value={setup.difficulty}
-                  onChange={(e) => setSetup({ ...setup, difficulty: e.target.value })}
-                >
-                  {DIFFICULTIES.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Rivales
-                <select
-                  value={setup.opponents}
-                  onChange={(e) => setSetup({ ...setup, opponents: Number(e.target.value) })}
-                >
-                  <option value={1}>1 bot</option>
-                  <option value={2}>2 bots</option>
-                  <option value={3}>3 bots</option>
-                </select>
-              </label>
-            </>
-          ) : (
-            <>
-              <label>
-                Bots
-                <select
-                  value={setup.botCount}
-                  onChange={(e) => {
-                    const botCount = Number(e.target.value);
-                    setSetup({
-                      ...setup,
-                      botCount,
-                      botDifficulties: Array.from(
-                        { length: botCount },
-                        (_, i) => setup.botDifficulties[i] || setup.difficulty
-                      ),
-                    });
-                  }}
-                >
-                  <option value={2}>2 bots</option>
-                  <option value={3}>3 bots</option>
-                  <option value={4}>4 bots</option>
-                </select>
-              </label>
-              {setup.botDifficulties.map((diff, index) => (
-                <label key={index}>
-                  Bot {index + 1}
-                  <select
-                    value={diff}
-                    onChange={(e) => {
-                      const botDifficulties = [...setup.botDifficulties];
-                      botDifficulties[index] = e.target.value;
-                      setSetup({ ...setup, botDifficulties });
-                    }}
-                  >
-                    {DIFFICULTIES.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </>
-          )}
-          <label>
-            Seed
-            <input
-              value={setup.seed}
-              placeholder="opcional"
-              onChange={(e) => setSetup({ ...setup, seed: e.target.value })}
-            />
-          </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={setup.debug}
-              onChange={(e) => setSetup({ ...setup, debug: e.target.checked })}
-            />
-            Debug del bot
-          </label>
-          <button type="submit" disabled={busy}>
-            {setup.mode === "spectate" ? "Empezar exhibición" : "Sentarse a la mesa"}
-          </button>
-        </form>
-      )}
 
       {error && <p className="error">{error}</p>}
       {banner && <div className="turn-banner">{banner}</div>}
@@ -989,7 +860,6 @@ export default function App() {
         </div>
       )}
 
-      {setup.debug && game?.lastDecision && <DebugPanel decision={game.lastDecision} />}
       {resultOpen && view?.over && (
         <ResultModal
           view={view}
