@@ -40,6 +40,6 @@ test("parseTiles assigns copies", () => {
 });
 
 test("joker rack value", () => {
-  assert.equal(rackValue(jokerTile(0)), 30);
+  assert.equal(rackValue(jokerTile(0)), 50);
   assert.equal(rackValue(numberedTile(3, 13)), 13);
 });

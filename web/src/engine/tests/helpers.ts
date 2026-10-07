@@ -44,6 +44,10 @@ export function viewOf(rack: Tile[] | string, extras: Partial<PlayerView> = {}):
     over: extras.over ?? false,
     winner: extras.winner ?? null,
     seedPublic: extras.seedPublic ?? null,
+    round: extras.round ?? 1,
+    roundPoints: extras.roundPoints ?? [0, 0],
+    rackValues: extras.rackValues ?? [0, 0],
+    matchOver: extras.matchOver ?? false,
     ...extras,
     rack: tiles,
   };

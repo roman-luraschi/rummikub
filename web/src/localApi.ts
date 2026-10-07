@@ -6,6 +6,7 @@ import {
   playTiles as playLocal,
   previewPlay as previewLocal,
   setMoveChooser,
+  nextRound as nextRoundLocal,
   tickGame as tickLocal,
 } from "./engine/session";
 
@@ -73,6 +74,10 @@ export async function previewPlay(id: string, tileIds: number[]) {
 
 export async function playTiles(id: string, tileIds: number[], melds?: number[][]): Promise<GamePayload> {
   return playLocal(id, tileIds, melds);
+}
+
+export async function nextRound(id: string): Promise<GamePayload> {
+  return nextRoundLocal(id);
 }
 
 export async function tickGame(id: string): Promise<GamePayload> {

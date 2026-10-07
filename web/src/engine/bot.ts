@@ -167,6 +167,10 @@ export interface PlayerView {
   over: boolean;
   winner: number | null;
   seedPublic: number | null;
+  round: number;
+  roundPoints: number[];
+  rackValues: number[];
+  matchOver: boolean;
 }
 
 export interface ScoreBreakdown {

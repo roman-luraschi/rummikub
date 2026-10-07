@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GameEngine, IllegalMove, type GameState, type Player } from "../game";
+import { GameEngine, IllegalMove, isMatchOver, type GameState, type Player } from "../game";
 import { findPlayForSelectedTiles, TableSolver } from "../solver";
 import { allTiles } from "../table";
 import { buildDeck, parseTiles, tileStr } from "../tile";
 import { validateEntireTable } from "../validator";
-import { configOf, run, tableOf } from "./helpers";
+import { configOf, group, run, tableOf } from "./helpers";
 
 function player(partial: Partial<Player> & Pick<Player, "id" | "rack">): Player {
   return {
@@ -29,6 +29,9 @@ function stateOf(players: Player[], extras: Partial<GameState> = {}): GameState 
     winner: extras.winner ?? null,
     over: extras.over ?? false,
     emptyPasses: extras.emptyPasses ?? 0,
+    round: extras.round ?? 1,
+    roundPoints: extras.roundPoints ?? players.map(() => 0),
+    firstPlayer: extras.firstPlayer ?? 0,
   };
 }
 
@@ -148,4 +151,41 @@ test("initial play accepts selected 30-point run with duplicate nearby", () => {
     new Set(selected.map((t) => t.id)),
   );
   assert.ok(nxt.players[0].rack.some((t) => t.id === elevenCopies[1].id));
+});
+
+test("going out adds the opponents' tiles and a joker is worth 50", () => {
+  const engine = new GameEngine();
+  const hand = parseTiles("10R 10B 10N");
+  const state = stateOf([
+    player({ id: 0, rack: hand, hasInitialMeld: false }),
+    player({ id: 1, rack: parseTiles("1R 2B J"), hasInitialMeld: true }),
+  ]);
+  const nxt = engine.play(state, configOf(tableOf(group("10R 10B 10N")), hand, []));
+  assert.equal(nxt.winner, 0);
+  assert.equal(nxt.scores[0], 53);
+  assert.equal(nxt.scores[1], 0);
+  assert.equal(nxt.roundPoints[0], 53);
+  assert.equal(isMatchOver(nxt), false);
+  const again = engine.nextRound(nxt);
+  assert.equal(again.round, 2);
+  assert.equal(again.over, false);
+  assert.equal(again.scores[0], 53);
+  assert.equal(again.current, 1);
+});
+
+test("the match ends when a player reaches 500", () => {
+  const engine = new GameEngine();
+  const hand = parseTiles("10R 10B 10N");
+  const state = stateOf(
+    [
+      player({ id: 0, rack: hand, hasInitialMeld: false }),
+      player({ id: 1, rack: parseTiles("1R 2B J"), hasInitialMeld: true }),
+    ],
+    { scores: [460, 20] },
+  );
+  const nxt = engine.play(state, configOf(tableOf(group("10R 10B 10N")), hand, []));
+  assert.equal(nxt.scores[0], 513);
+  assert.equal(nxt.scores[1], 20);
+  assert.equal(isMatchOver(nxt), true);
+  assert.throws(() => engine.nextRound(nxt), /match is already over/);
 });

@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { createGame, drawTile, playTiles, previewPlay, tickGame } from "./localApi";
+import { createGame, drawTile, nextRound, playTiles, previewPlay, tickGame } from "./localApi";
+import {
+  clearOnlineSession,
+  connectRoom,
+  createOnlineRoom,
+  joinOnlineRoom,
+  loadOnlineSession,
+  saveOnlineSession,
+  type RoomConnection,
+} from "./online/client";
+import { previewSelection } from "./online/preview";
+import type { WaitingInfo } from "./online/protocol";
 import {
   buildFlights,
   elementTopLeft,
@@ -14,7 +25,7 @@ import {
   type FlyPiece,
 } from "./motion";
 import ResultModal from "./ResultModal";
-import StartMenu, { type GameSetup } from "./StartMenu";
+import StartMenu, { type GameSetup, type OnlineCreate } from "./StartMenu";
 import TileView from "./Tile";
 import {
   applyDrop,
@@ -42,18 +53,8 @@ const EXTREME_TURN_SECONDS = 60;
 
 const actionBtn = "w-full sm:w-auto";
 
-function FaceDownRow({
-  count,
-  compact,
-  stacked,
-  anchor,
-}: {
-  count: number;
-  compact?: boolean;
-  stacked?: boolean;
-  anchor?: string;
-}) {
-  const n = Math.min(count, stacked ? 3 : compact ? 10 : 14);
+function FaceDownRow({ count, compact, anchor }: { count: number; compact?: boolean; anchor?: string }) {
+  const n = Math.min(count, compact ? 10 : 14);
   return (
     <div className="facedown-row" aria-label={`${count} fichas ocultas`} data-anchor={anchor}>
       {Array.from({ length: n }, (_, i) => (
@@ -61,7 +62,24 @@ function FaceDownRow({
           <TileView tile={{ id: -i, isJoker: false, label: "", color: "black", rank: 0 }} faceDown size="sm" />
         </div>
       ))}
-      {!stacked && count > n && <span className="ml-2 text-[13px] opacity-75">+{count - n}</span>}
+      {count > n && <span className="ml-2 text-[13px] opacity-75">+{count - n}</span>}
+    </div>
+  );
+}
+
+function PoolPile({ count }: { count: number }) {
+  const n = Math.min(count, 5);
+  return (
+    <div className="pool-pile" data-anchor="pool" aria-label={`${count} fichas en el pozo`}>
+      {n === 0 ? (
+        <div className="pool-empty" />
+      ) : (
+        Array.from({ length: n }, (_, i) => (
+          <div key={i} className="pool-layer" style={{ zIndex: i, ["--i" as string]: i }}>
+            <TileView tile={{ id: -i - 1, isJoker: false, label: "", color: "black", rank: 0 }} faceDown size="sm" />
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -91,11 +109,23 @@ export default function App() {
   const [hover, setHover] = useState<DropTarget | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
   const [turnLeft, setTurnLeft] = useState<number | null>(null);
+  const [waiting, setWaiting] = useState<WaitingInfo | null>(null);
+  const [onlineOn, setOnlineOn] = useState(false);
+  const [reconnecting, setReconnecting] = useState(() => loadOnlineSession() != null);
+  const [linkCode] = useState(() => new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "");
   const gameRef = useRef<GamePayload | null>(null);
   const pilesRef = useRef<Pile[]>([]);
   const lastGameId = useRef<string | null>(null);
   const playGen = useRef(0);
   const timedOut = useRef(false);
+  const onlineRef = useRef<RoomConnection | null>(null);
+  const onlineActive = useRef(false);
+  const busyRef = useRef(false);
+  const queuedRemote = useRef<{ payload: GamePayload; deal: boolean } | null>(null);
+  const handlersRef = useRef({
+    apply: (_payload: GamePayload, _deal: boolean) => {},
+    fail: (_message: string) => {},
+  });
   gameRef.current = game;
   pilesRef.current = piles;
 
@@ -103,7 +133,7 @@ export default function App() {
   const spectator = Boolean(game?.spectator);
   const canAct = Boolean(game && game.yourTurn && !view?.over && !busy && !spectator);
   const timedTurn = Boolean(
-    !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "extreme")
+    !onlineOn && !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "extreme")
   );
   const committedIds = useMemo(
     () => new Set(view?.table.melds.flatMap((meld) => meld.tiles.map((tile) => tile.id)) ?? []),
@@ -138,8 +168,11 @@ export default function App() {
   const status = useMemo(() => {
     if (!view) return "Elegí dificultad y empezá una partida.";
     if (view.over) {
-      if (view.winner == null) return "Ronda terminada · empate.";
-      return `Ronda terminada. Gana ${view.names[view.winner]}.`;
+      if (view.matchOver && view.winner != null) {
+        return `Partida terminada. Gana ${view.names[view.winner]} con ${view.scores[view.winner]} puntos.`;
+      }
+      if (view.winner == null) return `Ronda ${view.round} empatada. Nadie suma. Se juega hasta 500.`;
+      return `Ronda ${view.round}: ${view.names[view.winner]} suma ${view.roundPoints[view.winner]}. Se juega hasta 500.`;
     }
     return game?.yourTurn
       ? dirty
@@ -232,7 +265,7 @@ export default function App() {
 
     const rackTiles = event.tilesFromRack;
     if (rackTiles.length) {
-      setBanner(stepBanner(event));
+      setBanner(stepBanner(event, gameRef.current?.view.playerId));
     }
     const seat = viewingActor
       ? elementTopLeft("[data-anchor='rack']")
@@ -303,7 +336,10 @@ export default function App() {
       return;
     }
 
-    if (!event.isBot && (event.type === "play" || event.type === "initial")) {
+    const viewerId = gameRef.current?.view.playerId;
+    const humanSelf = viewerId != null && event.playerId === viewerId && !event.isBot;
+
+    if (humanSelf && (event.type === "play" || event.type === "initial")) {
       setLandingIds(landingTileIds(step));
       setGame((current) =>
         current
@@ -320,7 +356,7 @@ export default function App() {
       return;
     }
 
-    if (event.isBot && (event.type === "play" || event.type === "initial")) {
+    if (!humanSelf && (event.type === "play" || event.type === "initial")) {
       await animateOpponentTablePlay(step, event);
       return;
     }
@@ -330,7 +366,7 @@ export default function App() {
       await sleep(320);
     }
 
-    setBanner(stepBanner(event));
+    setBanner(stepBanner(event, gameRef.current?.view.playerId));
 
     if (event.type === "draw" && !event.drawn) {
       await sleep(520);
@@ -342,9 +378,10 @@ export default function App() {
       return;
     }
 
+    const viewingActor = event.playerId === gameRef.current?.view.playerId;
     if (event.type === "draw") {
       setHideFrom({ pool: true, count: 1 });
-    } else if (event.isBot && event.playerId !== gameRef.current?.view.playerId) {
+    } else if (!viewingActor) {
       setHideFrom({ seat: event.playerId, count: Math.max(1, event.tilesFromRack.length) });
     } else {
       setHiddenIds(event.tilesFromRack.map((tile) => tile.id));
@@ -361,7 +398,7 @@ export default function App() {
     setHideFrom(null);
 
     const drawnIds =
-      event.type === "draw" && (!event.isBot || event.playerId === gameRef.current?.view.playerId)
+      event.type === "draw" && event.playerId === gameRef.current?.view.playerId
         ? step.view.rack
           .filter((tile) => !(gameRef.current?.view.rack.some((current) => current.id === tile.id)))
           .map((tile) => tile.id)
@@ -416,6 +453,7 @@ export default function App() {
   }
 
   async function withBusy(fn: () => Promise<void>) {
+    busyRef.current = true;
     setBusy(true);
     setError("");
     try {
@@ -423,13 +461,76 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {
+      busyRef.current = false;
       setBusy(false);
       setBanner("");
       setFlights([]);
       setHiddenIds([]);
       setHideFrom(null);
+      const queued = queuedRemote.current;
+      queuedRemote.current = null;
+      if (queued) void applyPayload(queued.payload, { deal: queued.deal });
     }
   }
+
+  handlersRef.current = {
+    apply: (payload, deal) => {
+      setReconnecting(false);
+      setWaiting(null);
+      if (busyRef.current) {
+        queuedRemote.current = { payload, deal };
+        return;
+      }
+      void applyPayload(payload, { deal });
+    },
+    fail: (message) => {
+      setReconnecting(false);
+      setError(message);
+    },
+  };
+
+  function attach(creds: { code: string; token: string; seat: number }) {
+    onlineRef.current?.close();
+    onlineActive.current = true;
+    setOnlineOn(true);
+    saveOnlineSession(creds);
+    onlineRef.current = connectRoom(creds, {
+      onWelcome: (message) => {
+        if (message.payload) {
+          handlersRef.current.apply(message.payload, message.payload.view.history.length === 0);
+          return;
+        }
+        setReconnecting(false);
+        setWaiting(message.waiting);
+      },
+      onState: (payload) => handlersRef.current.apply(payload, !gameRef.current),
+      onWaiting: (info) => {
+        setReconnecting(false);
+        setWaiting(info);
+      },
+      onError: (message) => handlersRef.current.fail(message),
+      onClose: () => {
+        if (!onlineActive.current) return;
+        handlersRef.current.fail("Se cortó la conexión. Recargá para volver a la sala.");
+      },
+    });
+  }
+
+  const attachRef = useRef(attach);
+  attachRef.current = attach;
+
+  useEffect(() => {
+    const stored = loadOnlineSession();
+    const link = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "";
+    if (stored && (!link || stored.code === link)) attachRef.current(stored);
+    else setReconnecting(false);
+    if (stored && link && stored.code !== link) clearOnlineSession();
+    return () => {
+      onlineActive.current = false;
+      onlineRef.current?.close();
+      onlineRef.current = null;
+    };
+  }, []);
 
   async function onStart() {
     playGen.current += 1;
@@ -457,6 +558,16 @@ export default function App() {
     });
   }
 
+  async function onNextRound() {
+    if (!game || !view?.over || view.matchOver) return;
+    playGen.current += 1;
+    await withBusy(async () => {
+      const payload = onlineRef.current ? await onlineRef.current.nextRound() : await nextRound(game.id);
+      setSelected([]);
+      await applyPayload(payload, { deal: true });
+    });
+  }
+
   useEffect(() => {
     if (!game?.spectator || !autoplay || !view || view.over || busy) return;
     const timer = window.setTimeout(() => {
@@ -464,6 +575,14 @@ export default function App() {
     }, 450);
     return () => window.clearTimeout(timer);
   }, [game?.id, game?.spectator, view?.current, view?.over, view?.history.length, autoplay, busy]);
+
+  useEffect(() => {
+    if (!game?.spectator || !autoplay || !view?.over || view.matchOver || busy) return;
+    const timer = window.setTimeout(() => {
+      void onNextRound();
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [game?.id, game?.spectator, view?.over, view?.matchOver, view?.round, autoplay, busy]);
 
   function toggleTile(id: number) {
     if (!canAct) return;
@@ -554,6 +673,31 @@ export default function App() {
     setTurnLeft(null);
   }
 
+  function leaveOnline() {
+    onlineActive.current = false;
+    onlineRef.current?.close();
+    onlineRef.current = null;
+    clearOnlineSession();
+    setOnlineOn(false);
+    setWaiting(null);
+    setReconnecting(false);
+    resetToLobby();
+  }
+
+  async function onCreateRoom(room: OnlineCreate) {
+    await withBusy(async () => {
+      const creds = await createOnlineRoom(room);
+      attach(creds);
+    });
+  }
+
+  async function onJoinRoom(code: string, name: string) {
+    await withBusy(async () => {
+      const creds = await joinOnlineRoom(code, name);
+      attach(creds);
+    });
+  }
+
   async function onDraw() {
     if (!game || !view) return;
     const pulledFromRack = view.rack.some((tile) => onTableIds.has(tile.id));
@@ -562,7 +706,7 @@ export default function App() {
       return;
     }
     await withBusy(async () => {
-      const payload = await drawTile(game.id);
+      const payload = onlineRef.current ? await onlineRef.current.draw() : await drawTile(game.id);
       setSelected([]);
       await applyPayload(payload);
     });
@@ -578,7 +722,7 @@ export default function App() {
     setPiles(pilesFromMelds(current.view.table.melds));
     setError("Se acabó el tiempo: robás del pozo.");
     await withBusy(async () => {
-      const payload = await drawTile(current.id);
+      const payload = onlineRef.current ? await onlineRef.current.draw() : await drawTile(current.id);
       setSelected([]);
       await applyPayload(payload);
     });
@@ -615,11 +759,10 @@ export default function App() {
         return;
       }
       await withBusy(async () => {
-        const payload = await playTiles(
-          game.id,
-          [],
-          piles.filter((pile) => pile.tiles.length).map((pile) => pile.tiles.map((tile) => tile.id))
-        );
+        const melds = piles.filter((pile) => pile.tiles.length).map((pile) => pile.tiles.map((tile) => tile.id));
+        const payload = onlineRef.current
+          ? await onlineRef.current.play([], melds)
+          : await playTiles(game.id, [], melds);
         setSelected([]);
         await applyPayload(payload);
       });
@@ -627,6 +770,18 @@ export default function App() {
     }
     if (selected.length === 0) {
       setError("Arrastrá fichas al paño o seleccioná un juego del atril.");
+      return;
+    }
+    if (onlineRef.current) {
+      if (!view) return;
+      try {
+        const preview = previewSelection(view, selected);
+        setPiles((current) => reconcilePiles(current, preview.table.melds));
+        setSelected([]);
+        setError("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se puede bajar esa selección");
+      }
       return;
     }
     await withBusy(async () => {
@@ -642,6 +797,14 @@ export default function App() {
     .map((name, i) => ({ name, i }))
     .filter((item) => item.i !== view.playerId) ?? [];
 
+  if (!game && reconnecting && !waiting) {
+    return (
+      <div className="felt-surface flex min-h-screen items-center justify-center px-4">
+        <p className="font-display text-3xl text-ivory">Conectando…</p>
+      </div>
+    );
+  }
+
   if (!game) {
     return (
       <StartMenu
@@ -652,6 +815,15 @@ export default function App() {
         onStart={() => {
           void onStart();
         }}
+        onCreateRoom={(room) => {
+          void onCreateRoom(room);
+        }}
+        onJoinRoom={(code, name) => {
+          void onJoinRoom(code, name);
+        }}
+        initialCode={linkCode}
+        waiting={waiting}
+        onLeave={leaveOnline}
       />
     );
   }
@@ -668,7 +840,12 @@ export default function App() {
         </div>
         {view && (
           <div className="flex flex-wrap items-center gap-2">
-            <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">Seed {view.seed}</span>
+            <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">Ronda {view.round} · a 500</span>
+            <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">
+              {view.names
+                .map((name, index) => `${!spectator && index === view.playerId ? "Vos" : name} ${view.scores[index]}`)
+                .join(" · ")}
+            </span>
             <span className="hud-chip rounded-2xl px-3 py-2.5 text-sm">Pozo {view.poolSize}</span>
             <span className={`hud-chip rounded-2xl px-3 py-2.5 text-sm ${game?.yourTurn ? "font-extrabold text-gold" : ""}`}>
               {status}
@@ -702,13 +879,19 @@ export default function App() {
         <div>
           <div className="mb-3.5 grid grid-cols-1 gap-3 md:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
             {opponents.map(({ name, i }) => (
-              <article key={name} className={`opp-card${view.current === i ? " is-active" : ""}`}>
+              <article key={i} className={`opp-card${view.current === i ? " is-active" : ""}`}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                   <h3 className="font-display text-base">{name}</h3>
-                  <p className="m-0 text-[13px] opacity-80">
-                    {view.rackSizes[i]} fichas · {view.hasInitialMeld[i] ? "en juego" : "sin abrir"} · {view.difficulties[i]}
-                  </p>
+                  <p className="m-0 text-lg font-extrabold tabular-nums text-gold">{view.scores[i]} pts</p>
                 </div>
+                <p className="m-0 mb-2 text-[13px] opacity-80">
+                  {view.rackSizes[i]} fichas · {view.hasInitialMeld[i] ? "en juego" : "sin abrir"}
+                  {view.isBot[i]
+                    ? ` · ${view.difficulties[i] ?? ""}`
+                    : game.connected
+                      ? ` · ${game.connected[i] ? "en línea" : "desconectado"}`
+                      : ""}
+                </p>
                 <FaceDownRow
                   count={Math.max(0, view.rackSizes[i] - (hideFrom?.seat === i ? hideFrom.count : 0))}
                   compact
@@ -716,18 +899,12 @@ export default function App() {
                 />
               </article>
             ))}
-            <article className="flex flex-col items-center justify-center gap-2 py-1">
-              <div className="text-center">
+            <article className="opp-card">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="font-display text-base">Pozo</h3>
                 <p className="m-0 text-[13px] opacity-80">{view.poolSize} fichas</p>
               </div>
-              <div className="pool-well">
-                <FaceDownRow
-                  count={Math.max(0, view.poolSize - (hideFrom?.pool ? hideFrom.count : 0))}
-                  stacked
-                  anchor="pool"
-                />
-              </div>
+              <PoolPile count={Math.max(0, view.poolSize - (hideFrom?.pool ? hideFrom.count : 0))} />
             </article>
           </div>
 
@@ -814,6 +991,9 @@ export default function App() {
                   <h2 className="font-display text-xl sm:text-2xl">
                     {spectator ? `Atril de ${view.names[view.playerId]}` : "Tu atril"}
                   </h2>
+                  <span className="text-lg font-extrabold tabular-nums text-gold">
+                    {view.scores[view.playerId]} pts
+                  </span>
                   {timedTurn && turnLeft != null && (
                     <span className={`rack-clock${turnLeft <= 10 ? " is-low" : ""}`}>
                       {Math.ceil(turnLeft)}s
@@ -879,8 +1059,13 @@ export default function App() {
                   </button>
                 </>
               )}
-              <button className={`ghost ${actionBtn}`} onClick={resetToLobby}>
-                Nueva partida
+              {view.over && !view.matchOver && (
+                <button className={`primary ${actionBtn}`} disabled={busy} onClick={() => void onNextRound()}>
+                  Siguiente ronda
+                </button>
+              )}
+              <button className={`ghost ${actionBtn}`} onClick={onlineOn ? leaveOnline : resetToLobby}>
+                {onlineOn ? "Salir de la sala" : "Nueva partida"}
               </button>
             </div>
           </section>
@@ -892,7 +1077,8 @@ export default function App() {
           view={view}
           spectator={spectator}
           onClose={() => setResultOpen(false)}
-          onNewGame={resetToLobby}
+          onNewGame={onlineOn ? leaveOnline : resetToLobby}
+          onNextRound={() => void onNextRound()}
         />
       )}
     </div>

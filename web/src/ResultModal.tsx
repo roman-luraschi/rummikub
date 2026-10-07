@@ -6,37 +6,46 @@ type ResultModalProps = {
   spectator: boolean;
   onClose: () => void;
   onNewGame: () => void;
+  onNextRound: () => void;
 };
 
 function resultCopy(view: GameView, spectator: boolean) {
   const winnerId = view.winner;
   const rummikub = winnerId != null && view.rackSizes[winnerId] === 0;
+  const award = winnerId == null ? 0 : view.roundPoints[winnerId];
   if (winnerId == null) {
     return {
-      kicker: "Pozo vacío",
+      kicker: `Ronda ${view.round}`,
       title: "Empate",
-      detail: "Nadie pudo seguir bajando. Quedaron con los mismos puntos en el atril.",
+      detail: "Quedaron igualados. Nadie suma y la partida sigue hasta 500.",
       tone: "draw" as const,
     };
   }
   const name = view.names[winnerId];
   const youWon = !spectator && winnerId === view.playerId;
   const youLost = !spectator && winnerId !== view.playerId;
+  if (view.matchOver) {
+    return {
+      kicker: "500 puntos",
+      title: youWon ? "¡Ganaste la partida!" : youLost ? "Perdiste la partida" : `Gana ${name}`,
+      detail: youWon
+        ? `Llegaste a ${view.scores[winnerId]} puntos.`
+        : `${name} llegó a ${view.scores[winnerId]} puntos.`,
+      tone: youWon ? ("win" as const) : youLost ? ("loss" as const) : ("win" as const),
+    };
+  }
+  const gained = youWon ? `Sumaste ${award}` : `${name} sumó ${award}`;
   return {
     kicker: rummikub ? "Rummikub" : "Pozo vacío",
-    title: youWon ? "¡Ganaste!" : youLost ? "Perdiste" : `Gana ${name}`,
+    title: youWon ? "¡Ganaste la ronda!" : youLost ? "Perdiste la ronda" : `Gana ${name}`,
     detail: rummikub
-      ? youWon
-        ? "Te quedaste sin fichas."
-        : `${name} se quedó sin fichas.`
-      : youWon
-        ? "Se acabó el pozo y tenías menos puntos en el atril."
-        : `Se acabó el pozo. ${name} tenía menos puntos en el atril.`,
+      ? `${gained} por las fichas que quedaron en los otros atriles. Se juega hasta 500.`
+      : `${gained}. Tenía menos puntos en el atril cuando se vació el pozo. Se juega hasta 500.`,
     tone: youWon ? ("win" as const) : youLost ? ("loss" as const) : ("win" as const),
   };
 }
 
-export default function ResultModal({ view, spectator, onClose, onNewGame }: ResultModalProps) {
+export default function ResultModal({ view, spectator, onClose, onNewGame, onNextRound }: ResultModalProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const copy = resultCopy(view, spectator);
 
@@ -74,20 +83,34 @@ export default function ResultModal({ view, spectator, onClose, onNewGame }: Res
                   {won ? " · ganó" : ""}
                 </span>
                 <strong>
-                  {view.rackSizes[index]} fichas
-                  <em>{view.scores[index] >= 0 ? `+${view.scores[index]}` : view.scores[index]} pts</em>
+                  {view.rackValues[index]} en el atril
+                  <em>
+                    {view.roundPoints[index] > 0 ? `+${view.roundPoints[index]} · ` : ""}
+                    {view.scores[index]} pts
+                  </em>
                 </strong>
               </li>
             );
           })}
         </ul>
         <div className="flex flex-col justify-center gap-2.5 sm:flex-row sm:flex-wrap">
-          <button ref={closeRef} className="primary w-full sm:w-auto" onClick={onNewGame}>
+          {!view.matchOver && (
+            <button ref={closeRef} className="primary w-full sm:w-auto" onClick={onNextRound}>
+              Siguiente ronda
+            </button>
+          )}
+          <button
+            ref={view.matchOver ? closeRef : undefined}
+            className={`${view.matchOver ? "primary" : "ghost"} w-full sm:w-auto`}
+            onClick={onNewGame}
+          >
             Nueva partida
           </button>
-          <button className="ghost w-full sm:w-auto" onClick={onClose}>
-            Ver la mesa
-          </button>
+          {!view.matchOver && (
+            <button className="ghost w-full sm:w-auto" onClick={onClose}>
+              Ver la mesa
+            </button>
+          )}
         </div>
       </div>
     </div>

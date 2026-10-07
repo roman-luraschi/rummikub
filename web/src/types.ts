@@ -34,6 +34,10 @@ export type GameView = {
   over: boolean;
   winner: number | null;
   seed: number | null;
+  round: number;
+  roundPoints: number[];
+  rackValues: number[];
+  matchOver: boolean;
   history: {
     playerId: number;
     playerName: string;
@@ -96,4 +100,6 @@ export type GamePayload = {
   yourTurn: boolean;
   spectator?: boolean;
   steps?: GameStep[];
+  /** Online only: one flag per seat. Absent in local games. */
+  connected?: boolean[];
 };

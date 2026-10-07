@@ -78,6 +78,10 @@ export function viewToData(view: PlayerView): GameView {
     over: view.over,
     winner: view.winner,
     seed: view.seedPublic,
+    round: view.round,
+    roundPoints: view.roundPoints,
+    rackValues: view.rackValues,
+    matchOver: view.matchOver,
     history: view.history.slice(-24).map((e) => eventToData(e, view.names, view.isBot)),
   };
 }

@@ -27,12 +27,28 @@ En Windows, `npm run bench -- --a extreme` se come los flags; pasá `dificultadA
 
 Dificultades: `easy`, `normal`, `hard`, `very_hard`, `extreme`.
 
+## Multijugador
+
+La partida local sigue en el navegador. Las salas online las lleva un Worker con un Durable Object por código, en `server/`.
+
+En una terminal, con Node 22 o más (`nvm use 24` si el `node` por defecto es más viejo):
+
+```powershell
+cd server
+npm install
+npm run dev
+```
+
+En otra, `cd web` y `npm run dev`. El sitio en `http://127.0.0.1:5173` habla con el Worker por el proxy de Vite. En el menú, "En línea" crea o busca una sala.
+
 ## Publicar (Cloudflare Pages)
 
 El juego está en: **https://rummikub-ai.pages.dev/**
 
 El repo es privado: https://github.com/roman-luraschi/rummikub-ai  
-Un push a `main` corre los tests y actualiza el site.
+Un push a `main` corre los tests, publica esta página y despliega el Worker de salas.
+
+El build de Pages usa el secret `VITE_MULTIPLAYER_URL` (la URL `https://rummikub-rooms.<subdominio>.workers.dev` que imprime `npm run deploy` en `server/`). El token de Cloudflare tiene que poder publicar Workers y Durable Objects, además de Pages.
 
 Para publicar a mano:
 

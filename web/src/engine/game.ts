@@ -7,6 +7,7 @@ import { SeededRng, openSlots, type PlayerView, type PublicEvent } from "./bot";
 
 export const RACK_SIZE = 14;
 export const INITIAL_MELD_POINTS = 30;
+export const MATCH_TARGET = 500;
 
 export class IllegalMove extends Error {}
 
@@ -30,6 +31,17 @@ export interface GameState {
   winner: number | null;
   over: boolean;
   emptyPasses: number;
+  round: number;
+  roundPoints: number[];
+  firstPlayer: number;
+}
+
+export function isMatchOver(state: GameState): boolean {
+  return state.over && state.scores.some((score) => score >= MATCH_TARGET);
+}
+
+function rackPoints(rack: Tile[]): number {
+  return rack.reduce((sum, tile) => sum + rackValue(tile), 0);
 }
 
 function clonePlayer(p: Player): Player {
@@ -48,6 +60,9 @@ export function cloneState(state: GameState): GameState {
     winner: state.winner,
     over: state.over,
     emptyPasses: state.emptyPasses,
+    round: state.round,
+    roundPoints: [...state.roundPoints],
+    firstPlayer: state.firstPlayer,
   };
 }
 
@@ -85,6 +100,9 @@ export class GameEngine {
       winner: null,
       over: false,
       emptyPasses: 0,
+      round: 1,
+      roundPoints: Array.from({ length: nPlayers }, () => 0),
+      firstPlayer: 0,
     };
   }
 
@@ -106,7 +124,25 @@ export class GameEngine {
       over: state.over,
       winner: state.winner,
       seedPublic: state.seed,
+      round: state.round,
+      roundPoints: [...state.roundPoints],
+      rackValues: state.over ? state.players.map((p) => rackPoints(p.rack)) : state.players.map(() => 0),
+      matchOver: isMatchOver(state),
     };
+  }
+
+  nextRound(state: GameState): GameState {
+    if (!state.over) throw new IllegalMove("The round is still going");
+    if (isMatchOver(state)) throw new IllegalMove("The match is already over");
+    const names = state.players.map((p) => p.name);
+    const bots = state.players.map((p) => p.difficulty);
+    const starter = (state.firstPlayer + 1) % state.players.length;
+    const fresh = this.newGame(state.players.length, state.seed + state.round, names, bots);
+    fresh.scores = [...state.scores];
+    fresh.round = state.round + 1;
+    fresh.current = starter;
+    fresh.firstPlayer = starter;
+    return fresh;
   }
 
   draw(state: GameState): GameState {
@@ -213,12 +249,14 @@ export class GameEngine {
   private finishRound(state: GameState, winnerId: number): void {
     state.over = true;
     state.winner = winnerId;
+    state.roundPoints = state.players.map(() => 0);
+    let award = 0;
     for (const player of state.players) {
       if (player.id === winnerId) continue;
-      const penalty = player.rack.reduce((s, t) => s + rackValue(t), 0);
-      state.scores[player.id] -= penalty;
-      state.scores[winnerId] += penalty;
+      award += rackPoints(player.rack);
     }
+    state.roundPoints[winnerId] = award;
+    state.scores[winnerId] += award;
     state.history.push({
       playerId: winnerId,
       type: "win",
@@ -239,7 +277,7 @@ export class GameEngine {
     }
     state.over = true;
     state.winner = null;
-    for (let i = 0; i < deadwood.length; i++) state.scores[i] -= deadwood[i];
+    state.roundPoints = state.players.map(() => 0);
   }
 
   private ensureActive(state: GameState): void {

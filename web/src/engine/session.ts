@@ -1,5 +1,5 @@
 import { RummyBot, type BotDecision, type BotMove, type PlayerView } from "./bot";
-import { GameEngine, IllegalMove, type GameState } from "./game";
+import { GameEngine, IllegalMove, isMatchOver, type GameState } from "./game";
 import { payload, tableToData, viewToData } from "./serialize";
 import { configurationFromLayout, findPlayForSelectedTiles } from "./solver";
 import type { GameEvent, GamePayload, GameStep } from "../types";
@@ -210,6 +210,15 @@ export async function playTiles(id: string, tileIds: number[], melds?: number[][
     throw new Error(err instanceof Error ? err.message : String(err));
   }
   const steps = [stepFromLast(id, session), ...(await playBots(id, session))];
+  return pack(id, session, steps);
+}
+
+export async function nextRound(id: string): Promise<GamePayload> {
+  const session = sessionOf(id);
+  if (!session.state.over) throw new Error("The round is still going");
+  if (isMatchOver(session.state)) throw new Error("The match is already over");
+  session.state = engine.nextRound(session.state);
+  const steps = await playBots(id, session);
   return pack(id, session, steps);
 }
 

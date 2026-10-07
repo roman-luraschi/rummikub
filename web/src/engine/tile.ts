@@ -23,7 +23,7 @@ export const NUMBERED_COUNT = NUM_COLORS * NUM_RANKS * COPIES_PER_TILE;
 export const JOKER_COUNT = 2;
 export const TOTAL_TILES = NUMBERED_COUNT + JOKER_COUNT;
 export const FIRST_JOKER_ID = NUMBERED_COUNT;
-export const JOKER_RACK_VALUE = 30;
+export const JOKER_RACK_VALUE = 50;
 
 export interface Tile {
   id: number;

@@ -77,8 +77,15 @@ export function snapshotTilePoints() {
   return map;
 }
 
-export function stepBanner(event: GameEvent) {
-  const who = event.isBot ? event.playerName : "Vos";
+function viewerIsActor(event: GameEvent, viewedPlayerId?: number): boolean {
+  if (viewedPlayerId == null) return !event.isBot;
+  return event.playerId === viewedPlayerId;
+}
+
+export function stepBanner(event: GameEvent, viewedPlayerId?: number) {
+  const self =
+    viewedPlayerId == null ? !event.isBot : event.playerId === viewedPlayerId && !event.isBot;
+  const who = self ? "Vos" : event.playerName;
   if (event.type === "draw") {
     return event.drawn ? `${who} roba una ficha del pozo` : `${who} pasa — el pozo está vacío`;
   }
@@ -97,7 +104,7 @@ export function flightOrigins(event: GameEvent, viewedPlayerId?: number) {
   const pool = anchorPoint("[data-anchor='pool']");
   const seat = anchorPoint(`[data-anchor='seat-${event.playerId}']`, pool);
   const rack = anchorPoint("[data-anchor='rack']");
-  const fromSelf = !event.isBot || event.playerId === viewedPlayerId;
+  const fromSelf = viewerIsActor(event, viewedPlayerId);
   if (event.type === "draw") {
     return {
       from: pool,
@@ -127,7 +134,7 @@ export function buildFlights(event: GameEvent, viewedPlayerId?: number): { start
   const tiles = piecesForEvent(event);
   const start: FlyPiece[] = [];
   const end: FlyPiece[] = [];
-  const fromSelf = !event.isBot || event.playerId === viewedPlayerId;
+  const fromSelf = viewerIsActor(event, viewedPlayerId);
   tiles.forEach((tile, index) => {
     const origin = event.type === "play" || event.type === "initial"
       ? (fromSelf ? tilePoint(tile.id) : from)
