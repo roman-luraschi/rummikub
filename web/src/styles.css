@@ -279,9 +279,12 @@
   min-height: calc(var(--tile-lg) * 1.42 + 16px);
   padding-top: 16px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 220, 170, 0.45) transparent;
+  touch-action: pan-x;
 }
+.rack-tiles .is-grabbable { touch-action: pan-x; }
 .rack-tiles > * { flex: 0 0 auto; }
 
 .rack-clock {

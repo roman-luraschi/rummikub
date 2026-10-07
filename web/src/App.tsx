@@ -591,11 +591,18 @@ export default function App() {
     );
   }
 
-  function startDrag(tile: TileData, origin: DragOrigin, event: { preventDefault: () => void; currentTarget: EventTarget; clientX: number; clientY: number }) {
+  function startDrag(
+    tile: TileData,
+    origin: DragOrigin,
+    event: { preventDefault: () => void; currentTarget: EventTarget; clientX: number; clientY: number; pointerType?: string },
+  ) {
     if (!canAct) return;
     if (!hasOpened && committedIds.has(tile.id)) return;
-    event.preventDefault();
+    const allowRackScroll = origin.place === "rack" && event.pointerType === "touch";
+    if (!allowRackScroll) event.preventDefault();
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
     const pending: DragState = {
       tile,
       origin,
@@ -604,15 +611,32 @@ export default function App() {
       offsetX: event.clientX - box.left,
       offsetY: event.clientY - box.top,
     };
-    let moved = false;
+    let mode: "pending" | "drag" | "scroll" = "pending";
+
+    const stop = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    };
 
     const onMove = (ev: PointerEvent) => {
-      const dist = Math.hypot(
-        ev.clientX - (pending.x + pending.offsetX),
-        ev.clientY - (pending.y + pending.offsetY)
-      );
-      if (!moved && dist < 7) return;
-      moved = true;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (mode === "pending") {
+        const dist = Math.hypot(dx, dy);
+        if (allowRackScroll) {
+          if (dist < 12) return;
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            mode = "scroll";
+            stop();
+            return;
+          }
+        } else if (dist < 7) {
+          return;
+        }
+        mode = "drag";
+      }
+      ev.preventDefault();
       setDrag({
         ...pending,
         x: ev.clientX - pending.offsetX,
@@ -622,10 +646,9 @@ export default function App() {
     };
 
     const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      if (!moved) {
-        if (origin.place === "rack") toggleTile(tile.id);
+      stop();
+      if (mode !== "drag") {
+        if (mode === "pending" && origin.place === "rack") toggleTile(tile.id);
         return;
       }
       const dest = dropFromPoint(ev.clientX, ev.clientY);
@@ -651,8 +674,16 @@ export default function App() {
       }
     };
 
+    const onCancel = () => {
+      mode = "scroll";
+      stop();
+      setDrag(null);
+      setHover(null);
+    };
+
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   }
 
   function resetTable() {
