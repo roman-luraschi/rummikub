@@ -144,7 +144,19 @@ export function reconcilePiles(current: Pile[], melds: MeldData[]): Pile[] {
   return next;
 }
 
-export function classifyPile(tiles: TileData[]): PileStatus {
+function sameTileOrder(left: { id: number }[], right: { id: number }[]): boolean {
+  return left.length === right.length && left.every((tile, index) => tile.id === right[index].id);
+}
+
+export function classifyPile(tiles: TileData[], committed: MeldData[] = []): PileStatus {
+  const kept = committed.find((meld) => sameTileOrder(meld.tiles, tiles));
+  if (kept) {
+    return {
+      kind: kept.kind,
+      label: kept.kind === "group" ? "Grupo" : "Escalera",
+      bindings: kept.bindings,
+    };
+  }
   if (tiles.length === 0) {
     return { kind: "building", label: "Vacío", bindings: [] };
   }

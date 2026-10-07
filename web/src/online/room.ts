@@ -1,7 +1,8 @@
 import { parseDifficulty, RummyBot, type PublicEvent } from "../engine/bot";
-import { GameEngine, isMatchOver, type GameState } from "../engine/game";
+import { GameEngine, IllegalMove, isMatchOver, type GameState } from "../engine/game";
 import { payload } from "../engine/serialize";
-import { configurationFromLayout, findPlayForSelectedTiles } from "../engine/solver";
+import { configurationFromLayout, findPlayForSelectedTiles, NoLegalPlay } from "../engine/solver";
+import { TableValidationError } from "../engine/validator";
 import type { GameEvent, GamePayload, GameStep } from "../types";
 import {
   PROTOCOL_VERSION,
@@ -14,6 +15,8 @@ import {
 const GENERIC_ERROR = "Error interno";
 const HOST_ROUND_ERROR = "Solo el anfitrión puede empezar la ronda siguiente";
 const ROUND_ERROR = "No podés empezar la ronda siguiente";
+export const DISCONNECT_GRACE_MS = 30_000;
+const AUTO_LIMIT = 120;
 
 export class RoomError extends Error {}
 
@@ -23,6 +26,9 @@ export interface RoomSeat {
   isBot: boolean;
   difficulty: string | null;
   connected: boolean;
+  abandoned: boolean;
+  /** After the 30s grace, later turns while this seat stays disconnected are passed immediately. */
+  disconnectPassed: boolean;
 }
 
 export interface RoomSnapshot {
@@ -32,6 +38,9 @@ export interface RoomSnapshot {
   state: GameState | null;
   seed: number | null;
   lastActivity: number;
+  opponentLeft: boolean;
+  /** Epoch ms when a disconnected human's first grace expires. Null when nobody is waiting. */
+  passAt: number | null;
 }
 
 export type GameCommand = Extract<ClientMessage, { type: "draw" | "play" | "nextRound" }>;
@@ -39,7 +48,7 @@ export type GameCommand = Extract<ClientMessage, { type: "draw" | "play" | "next
 export type SocketDispatch =
   | { type: "close" }
   | { type: "authenticate"; token: string }
-  | { type: "left" }
+  | { type: "left"; frames: GameState[] }
   | { type: "frames"; frames: GameState[]; requestId: string }
   | { type: "error"; message: string; requestId?: string };
 
@@ -86,6 +95,8 @@ function commit(room: RoomSnapshot, draft: RoomSnapshot): void {
   room.phase = draft.phase;
   room.seats = draft.seats;
   room.state = draft.state;
+  room.opponentLeft = draft.opponentLeft;
+  room.passAt = draft.passAt;
 }
 
 export function createRoom(input: {
@@ -117,6 +128,8 @@ export function createRoom(input: {
     phase: "lobby",
     seed: input.seed ?? null,
     lastActivity: Date.now(),
+    opponentLeft: false,
+    passAt: null,
     state: null,
     seats: seats.map((seat) => {
       if (seat.kind === "bot") {
@@ -128,6 +141,8 @@ export function createRoom(input: {
           isBot: true,
           difficulty,
           connected: true,
+          abandoned: false,
+          disconnectPassed: false,
         };
       }
       return {
@@ -136,6 +151,8 @@ export function createRoom(input: {
         isBot: false,
         difficulty: null,
         connected: false,
+        abandoned: false,
+        disconnectPassed: false,
       };
     }),
   };
@@ -149,7 +166,7 @@ export function createRoom(input: {
 
 export function joinRoom(room: RoomSnapshot, name: string): { token: string; seat: number; frames: GameState[] } {
   if (room.phase === "playing") throw new RoomError("La partida ya empezó");
-  const seat = room.seats.findIndex((item) => !item.isBot && !item.token);
+  const seat = room.seats.findIndex((item) => !item.isBot && !item.abandoned && !item.token);
   if (seat < 0) throw new RoomError("La sala está llena");
   const draft = structuredClone(room);
   const token = randomToken();
@@ -168,8 +185,17 @@ export function seatIndex(room: RoomSnapshot, token: string): number {
 }
 
 export function setConnected(room: RoomSnapshot, token: string, connected: boolean): void {
-  const seat = seatIndex(room, token);
-  room.seats[seat].connected = connected;
+  const index = seatIndex(room, token);
+  const seat = room.seats[index];
+  if (seat.abandoned) throw new RoomError("Token inválido");
+  if (connected) {
+    seat.connected = true;
+    seat.disconnectPassed = false;
+    if (room.state?.current === index) room.passAt = null;
+    return;
+  }
+  if (seat.connected) seat.disconnectPassed = false;
+  seat.connected = false;
 }
 
 export function drawFor(room: RoomSnapshot, token: string): GameState[] {
@@ -190,7 +216,9 @@ export function playFor(room: RoomSnapshot, token: string, tileIds: number[], me
         : findPlayForSelectedTiles(state.table, player.rack, tileIds, player.hasInitialMeld);
       return engine.play(state, config);
     } catch (error: unknown) {
-      throw new RoomError(error instanceof Error ? error.message : "Jugada inválida");
+      if (error instanceof RoomError || error instanceof IllegalMove) throw error;
+      if (error instanceof NoLegalPlay || error instanceof TableValidationError) throw new RoomError(error.message);
+      throw error;
     }
   });
   commit(room, draft);
@@ -203,17 +231,32 @@ export function mayStartNextRound(input: {
   hostConnected: boolean;
   selfConnected: boolean;
   isBot: boolean;
+  hostAbandoned?: boolean;
+  selfAbandoned?: boolean;
+  firstHuman?: number;
 }): boolean {
   if (!input.online) return true;
-  if (input.isBot || !input.selfConnected) return false;
+  if (input.isBot || !input.selfConnected || input.selfAbandoned) return false;
+  if (input.hostAbandoned) return input.firstHuman != null && input.seat === input.firstHuman;
   if (input.hostConnected) return input.seat === 0;
   return true;
 }
 
-export function leaveSeat(room: RoomSnapshot, token: string): void {
-  const seat = seatIndex(room, token);
-  room.seats[seat].token = null;
-  room.seats[seat].connected = false;
+export function leaveSeat(room: RoomSnapshot, token: string, now = Date.now()): GameState[] {
+  const index = seatIndex(room, token);
+  const seat = room.seats[index];
+  seat.token = null;
+  seat.connected = false;
+  seat.abandoned = true;
+  seat.disconnectPassed = false;
+  const humans = room.seats.filter((item) => !item.isBot && !item.abandoned).length;
+  if (room.phase === "playing" && humans <= 1) {
+    room.opponentLeft = true;
+    room.passAt = null;
+    return [];
+  }
+  if (room.state?.current === index) room.passAt = null;
+  return settle(room, now);
 }
 
 export function indexesToClose(tokens: (string | null)[], currentIndex: number, token: string): number[] {
@@ -237,10 +280,11 @@ export function nextRoundFor(room: RoomSnapshot, token: string): GameState[] {
   const seat = seatIndex(draft, token);
   if (!canAdvanceRound(draft, seat)) throw new RoomError(roundStartError(draft));
   if (!draft.state || draft.phase !== "playing") throw new RoomError("La partida todavía no empezó");
+  if (draft.opponentLeft) throw new RoomError("La partida ya terminó");
   if (!draft.state.over) throw new RoomError("La ronda sigue en juego");
   if (isMatchOver(draft.state)) throw new RoomError("La partida ya terminó");
   draft.state = engine.nextRound(draft.state);
-  const frames = playBots(draft);
+  const frames = settle(draft, Date.now());
   commit(room, draft);
   return frames;
 }
@@ -263,8 +307,8 @@ export function dispatchSocket(room: RoomSnapshot, token: string | null, raw: st
     return { type: "authenticate", token: auth };
   }
   if (isLeave(raw)) {
-    leaveSeat(room, token);
-    return { type: "left" };
+    const frames = leaveSeat(room, token);
+    return { type: "left", frames };
   }
   const requestId = requestIdOf(raw);
   try {
@@ -272,23 +316,41 @@ export function dispatchSocket(room: RoomSnapshot, token: string | null, raw: st
     const frames = applyCommand(room, token, command);
     return { type: "frames", frames, requestId: command.requestId };
   } catch (error: unknown) {
-    return { type: "error", message: error instanceof Error ? error.message : "Error", requestId: requestId || undefined };
+    return socketError(error, requestId);
   }
+}
+
+function socketError(error: unknown, requestId: string): SocketDispatch {
+  if (error instanceof RoomError || error instanceof IllegalMove) {
+    return { type: "error", message: error.message, requestId: requestId || undefined };
+  }
+  console.error(error);
+  return { type: "error", message: GENERIC_ERROR, requestId: requestId || undefined };
+}
+
+function firstHumanSeat(room: RoomSnapshot): number {
+  return room.seats.findIndex((seat) => !seat.isBot && !seat.abandoned && seat.connected);
 }
 
 function canAdvanceRound(room: RoomSnapshot, seat: number): boolean {
   const actor = room.seats[seat];
+  const host = room.seats[0];
   return mayStartNextRound({
     online: true,
     seat,
-    hostConnected: Boolean(room.seats[0]?.connected),
+    hostConnected: Boolean(host?.connected) && !host?.abandoned,
     selfConnected: Boolean(actor?.connected),
     isBot: Boolean(actor?.isBot),
+    hostAbandoned: Boolean(host?.abandoned),
+    selfAbandoned: Boolean(actor?.abandoned),
+    firstHuman: firstHumanSeat(room),
   });
 }
 
 function roundStartError(room: RoomSnapshot): string {
-  return room.seats[0]?.connected ? HOST_ROUND_ERROR : ROUND_ERROR;
+  const host = room.seats[0];
+  if (host?.connected && !host.abandoned) return HOST_ROUND_ERROR;
+  return ROUND_ERROR;
 }
 
 function parseAuth(raw: string): string | null {
@@ -393,13 +455,13 @@ export function broadcastFor(room: RoomSnapshot, token: string, frames: GameStat
 }
 
 function maybeStart(room: RoomSnapshot): GameState[] {
-  const waiting = room.seats.some((seat) => !seat.isBot && !seat.token);
+  const waiting = room.seats.some((seat) => !seat.isBot && !seat.abandoned && !seat.token);
   if (waiting) return [];
   const names = room.seats.map((seat) => seat.name);
   const bots = room.seats.map((seat) => (seat.isBot ? seat.difficulty : null));
   room.state = engine.newGame(room.seats.length, room.seed, names, bots);
   room.phase = "playing";
-  return playBots(room);
+  return settle(room, Date.now());
 }
 
 function act(
@@ -410,15 +472,52 @@ function act(
   const seat = seatIndex(room, token);
   const state = room.state;
   if (room.phase !== "playing" || !state) throw new RoomError("La partida todavía no empezó");
+  if (room.opponentLeft) throw new RoomError("La partida ya terminó");
   if (state.over || state.current !== seat) throw new RoomError("No es tu turno");
   room.state = apply(state, seat);
   const frames = [structuredClone(room.state)];
-  frames.push(...playBots(room));
+  frames.push(...settle(room, Date.now()));
+  return frames;
+}
+
+export function settle(room: RoomSnapshot, now: number): GameState[] {
+  const frames: GameState[] = [];
+  if (!room.state || room.phase !== "playing" || room.state.over || room.opponentLeft) {
+    if (room.opponentLeft || room.state?.over) room.passAt = null;
+    return frames;
+  }
+  for (let guard = 0; guard < AUTO_LIMIT; guard += 1) {
+    if (!room.state || room.state.over || room.opponentLeft) break;
+    frames.push(...playBots(room));
+    if (!room.state || room.state.over || room.opponentLeft) break;
+    const current = room.state.current;
+    const seat = room.seats[current];
+    const player = room.state.players[current];
+    if (!seat || player.isBot) break;
+    if (seat.abandoned || (seat.disconnectPassed && !seat.connected)) {
+      room.passAt = null;
+      room.state = engine.draw(room.state);
+      frames.push(structuredClone(room.state));
+      continue;
+    }
+    if (!seat.connected) {
+      if (room.passAt == null) room.passAt = now + DISCONNECT_GRACE_MS;
+      if (now < room.passAt) break;
+      seat.disconnectPassed = true;
+      room.passAt = null;
+      room.state = engine.draw(room.state);
+      frames.push(structuredClone(room.state));
+      continue;
+    }
+    room.passAt = null;
+    break;
+  }
   return frames;
 }
 
 function playBots(room: RoomSnapshot): GameState[] {
   const frames: GameState[] = [];
+  if (room.opponentLeft) return frames;
   let guard = 0;
   while (
     room.state &&
@@ -454,6 +553,8 @@ function conceal(packed: GamePayload, room: RoomSnapshot): GamePayload {
   packed.view.seed = null;
   packed.lastDecision = null;
   packed.connected = room.seats.map((seat) => seat.connected);
+  packed.abandoned = room.seats.map((seat) => seat.abandoned === true);
+  packed.opponentLeft = room.opponentLeft === true;
   for (const step of packed.steps ?? []) {
     step.view.seed = null;
     step.lastDecision = null;
@@ -480,23 +581,24 @@ function eventFrom(view: GamePayload["view"], raw: PublicEvent): GameEvent {
 function stepsFor(room: RoomSnapshot, seat: number, frames: GameState[]): GameStep[] {
   return frames.map((state) => {
     const raw = state.history[state.history.length - 1];
-    const packed = conceal(payload(room.code, engine.view(state, seat), null, yourTurn(state, seat), false), room);
+    const packed = conceal(payload(room.code, engine.view(state, seat), null, yourTurn(room, state, seat), false), room);
     return {
       event: raw ? eventFrom(packed.view, raw) : null,
       view: packed.view,
-      yourTurn: packed.yourTurn,
+      yourTurn: yourTurn(room, state, seat),
       lastDecision: null,
     };
   });
 }
 
-function yourTurn(state: GameState, seat: number): boolean {
+function yourTurn(room: RoomSnapshot, state: GameState, seat: number): boolean {
+  if (room.opponentLeft) return false;
   return !state.over && state.current === seat && !state.players[seat].isBot;
 }
 
 function packSeat(room: RoomSnapshot, seat: number, frames: GameState[]): GamePayload {
   const state = room.state;
   if (!state) throw new RoomError("La partida todavía no empezó");
-  const packed = payload(room.code, engine.view(state, seat), null, yourTurn(state, seat), false, stepsFor(room, seat, frames));
+  const packed = payload(room.code, engine.view(state, seat), null, yourTurn(room, state, seat), false, stepsFor(room, seat, frames));
   return conceal(packed, room);
 }

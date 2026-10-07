@@ -173,6 +173,41 @@ test("going out adds the opponents' tiles and a joker is worth 50", () => {
   assert.equal(again.current, 1);
 });
 
+test("stalemate scores others minus the winner rack, and a tie scores nothing", () => {
+  const engine = new GameEngine();
+  const unique = stateOf(
+    [
+      player({ id: 0, rack: parseTiles("2R"), hasInitialMeld: true }),
+      player({ id: 1, rack: parseTiles("10R 10B 10N 10A"), hasInitialMeld: true }),
+    ],
+    { pool: [], emptyPasses: 0, current: 0 },
+  );
+  const afterFirst = engine.draw(unique);
+  assert.equal(afterFirst.over, false);
+  const decided = engine.draw(afterFirst);
+  assert.equal(decided.over, true);
+  assert.equal(decided.winner, 0);
+  assert.equal(decided.players[0].rack.length, 1);
+  assert.equal(decided.scores[0], 38);
+  assert.equal(decided.scores[1], 0);
+  assert.equal(decided.roundPoints[0], 38);
+  assert.equal(decided.roundPoints[1], 0);
+
+  const tied = stateOf(
+    [
+      player({ id: 0, rack: parseTiles("5R"), hasInitialMeld: true }),
+      player({ id: 1, rack: parseTiles("5B"), hasInitialMeld: true }),
+    ],
+    { pool: [], emptyPasses: 0, current: 0 },
+  );
+  const midway = engine.draw(tied);
+  const even = engine.draw(midway);
+  assert.equal(even.over, true);
+  assert.equal(even.winner, null);
+  assert.deepEqual(even.scores, [0, 0]);
+  assert.deepEqual(even.roundPoints, [0, 0]);
+});
+
 test("the match ends when a player reaches 500", () => {
   const engine = new GameEngine();
   const hand = parseTiles("10R 10B 10N");

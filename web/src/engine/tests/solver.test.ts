@@ -4,7 +4,8 @@ import { GROUP, RUN, pointValue, represented } from "../meld";
 import { runDisplayOrder } from "../runs";
 import { configurationFromLayout, findPlayForSelectedTiles, NoLegalPlay, TableSolver } from "../solver";
 import { tableTileIds } from "../table";
-import { isJoker, parseTiles, tileStr } from "../tile";
+import { isJoker, jokerTile, ORANGE, parseTiles, tileStr } from "../tile";
+import { makeGroup } from "../validator";
 import { group, run, tableOf } from "./helpers";
 
 test("add-only extends run", () => {
@@ -232,6 +233,24 @@ test("configurationFromLayout uses player piles", () => {
     new Set([twelve.id, ...blues.map((t) => t.id)]),
   );
   assert.equal(cfg.table.melds.length, 2);
+});
+
+test("configurationFromLayout keeps a committed joker bound to orange", () => {
+  const pair = parseTiles("7R 7B");
+  const joker = jokerTile(0);
+  const grouped = makeGroup([...pair, joker], [{ jokerId: joker.id, color: ORANGE, rank: 7 }]);
+  const table = tableOf(grouped);
+  const rack = parseTiles("1N 2N 3N");
+  const cfg = configurationFromLayout(
+    table,
+    rack,
+    [grouped.tiles.map((tile) => tile.id), rack.map((tile) => tile.id)],
+    true,
+  );
+  assert.equal(cfg.table.melds[0].kind, GROUP);
+  assert.equal(cfg.table.melds[0].bindings[0]?.jokerId, joker.id);
+  assert.equal(cfg.table.melds[0].bindings[0]?.color, ORANGE);
+  assert.equal(cfg.table.melds[1].kind, RUN);
 });
 
 test("layout accepts 1 after 13", () => {

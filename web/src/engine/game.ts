@@ -291,16 +291,33 @@ export class GameEngine {
   }
 
   private finishStalemate(state: GameState): void {
-    const deadwood = state.players.map((p) => p.rack.reduce((s, t) => s + rackValue(t), 0));
+    const deadwood = state.players.map((p) => rackPoints(p.rack));
     const best = Math.min(...deadwood);
     const winners = deadwood.map((v, i) => (v === best ? i : -1)).filter((i) => i >= 0);
-    if (winners.length === 1) {
-      this.finishRound(state, winners[0]);
+    state.over = true;
+    state.roundPoints = state.players.map(() => 0);
+    if (winners.length !== 1) {
+      state.winner = null;
       return;
     }
-    state.over = true;
-    state.winner = null;
-    state.roundPoints = state.players.map(() => 0);
+    const winnerId = winners[0];
+    state.winner = winnerId;
+    let others = 0;
+    for (const player of state.players) {
+      if (player.id === winnerId) continue;
+      others += rackPoints(player.rack);
+    }
+    const award = Math.max(0, others - deadwood[winnerId]);
+    state.roundPoints[winnerId] = award;
+    state.scores[winnerId] += award;
+    state.history.push({
+      playerId: winnerId,
+      type: "win",
+      tilesFromRack: [],
+      tableHash: tableHash(state.table),
+      rackSize: state.players[winnerId].rack.length,
+      drawn: false,
+    });
   }
 
   private ensureActive(state: GameState): void {

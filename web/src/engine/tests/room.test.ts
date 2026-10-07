@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SeededRng } from "../bot";
-import type { GameState } from "../game";
+import { GameEngine, type GameState } from "../game";
 import { buildDeck } from "../tile";
 import {
   clientError,
@@ -11,10 +11,12 @@ import {
   indexesToClose,
   joinRoom,
   nextRoundFor,
+  DISCONNECT_GRACE_MS,
   payloadFor,
   RoomError,
   setConnected,
   seatIndex,
+  settle,
   syncFor,
   type RoomSnapshot,
 } from "../../online/room";
@@ -213,7 +215,7 @@ test("online deals are not a stored 32-bit seed", () => {
 test("a command before auth does not change the room, leave invalidates the token, and a second connection closes the first", () => {
   const opened = createRoom({
     hostName: "Ana",
-    seats: [{ kind: "human" }, { kind: "human" }],
+    seats: [{ kind: "human" }, { kind: "human" }, { kind: "human" }],
     code: "mesa4",
     seed: 9,
   });
@@ -222,18 +224,29 @@ test("a command before auth does not change the room, leave invalidates the toke
   assert.equal(early.type, "close");
   assert.deepEqual(opened.room, before);
 
-  const guest = joinRoom(opened.room, "Luis");
-  const racks = opened.room.state?.players.map((player) => player.rack.map((tile) => tile.id));
+  const luis = joinRoom(opened.room, "Luis");
+  const sol = joinRoom(opened.room, "Sol");
+  assert.equal(opened.room.phase, "playing");
+  assert.equal(opened.room.state?.current, 0);
   const left = dispatchSocket(opened.room, opened.token, JSON.stringify({ type: "leave" }));
   assert.equal(left.type, "left");
   assert.throws(() => seatIndex(opened.room, opened.token), /token inválido/i);
   assert.throws(() => joinRoom(opened.room, "Otra"), /ya empezó/i);
-  assert.deepEqual(
-    opened.room.state?.players.map((player) => player.rack.map((tile) => tile.id)),
-    racks,
-  );
-  assert.equal(opened.room.seats[1].token, guest.token);
+  assert.equal(opened.room.seats[0].abandoned, true);
+  assert.equal(opened.room.seats[0].token, null);
+  assert.equal(opened.room.opponentLeft, false);
+  assert.equal(opened.room.seats[1].token, luis.token);
+  assert.equal(opened.room.seats[2].token, sol.token);
   assert.equal(opened.room.phase, "playing");
+  assert.equal(opened.room.state?.current, 1);
+  const passed = opened.room.state?.history[opened.room.state.history.length - 1];
+  assert.equal(passed?.type, "draw");
+  assert.equal(passed?.playerId, 0);
+
+  const mark = opened.room.state?.history.length ?? 0;
+  drawFor(opened.room, luis.token);
+  assert.ok((opened.room.state?.history.length ?? 0) > mark);
+  assert.equal(opened.room.state?.current, 2);
 
   assert.deepEqual(indexesToClose(["abc", null], 1, "abc"), [0]);
   assert.deepEqual(indexesToClose(["abc", "abc"], 1, "abc"), [0]);
@@ -268,6 +281,112 @@ test("only the host starts the next online round while connected", () => {
   assert.deepEqual(opened.room.state?.scores, [12, 3]);
   assert.equal(opened.room.state?.current, 1);
   assert.equal(opened.room.state?.firstPlayer, 1);
+});
+
+test("leaving when one human remains ends the match", () => {
+  const opened = createRoom({
+    hostName: "Ana",
+    seats: [{ kind: "human" }, { kind: "human" }],
+    code: "mesaLeave",
+    seed: 6,
+  });
+  const guest = joinRoom(opened.room, "Luis");
+  const left = dispatchSocket(opened.room, opened.token, JSON.stringify({ type: "leave" }));
+  assert.equal(left.type, "left");
+  assert.equal(opened.room.opponentLeft, true);
+  assert.equal(opened.room.seats[0].abandoned, true);
+  assert.throws(() => seatIndex(opened.room, opened.token), /token inválido/i);
+  assert.throws(() => drawFor(opened.room, guest.token), /ya terminó/i);
+  const view = payloadFor(opened.room, guest.token);
+  assert.equal(view.opponentLeft, true);
+  assert.equal(view.yourTurn, false);
+  assert.equal(view.abandoned?.[0], true);
+});
+
+test("a disconnected seat keeps its token, waits 30s, then passes later turns", () => {
+  const opened = createRoom({
+    hostName: "Ana",
+    seats: [{ kind: "human" }, { kind: "human" }],
+    code: "mesaDisc",
+    seed: 8,
+  });
+  const guest = joinRoom(opened.room, "Luis");
+  const now = 1_000_000;
+  setConnected(opened.room, opened.token, false);
+  assert.equal(seatIndex(opened.room, opened.token), 0);
+  const waiting = settle(opened.room, now);
+  assert.equal(waiting.length, 0);
+  assert.equal(opened.room.state?.current, 0);
+  assert.equal(opened.room.passAt, now + DISCONNECT_GRACE_MS);
+  assert.throws(() => drawFor(opened.room, guest.token), /no es tu turno/i);
+  assert.equal(opened.room.state?.current, 0);
+
+  const passed = settle(opened.room, now + DISCONNECT_GRACE_MS);
+  assert.ok(passed.length >= 1);
+  assert.equal(opened.room.state?.current, 1);
+  assert.equal(opened.room.seats[0].disconnectPassed, true);
+  assert.equal(opened.room.passAt, null);
+  assert.equal(opened.room.seats[0].token, opened.token);
+
+  drawFor(opened.room, guest.token);
+  assert.equal(opened.room.state?.current, 1);
+  assert.equal(opened.room.passAt, null);
+  assert.equal(opened.room.state?.players[0].rack.length, 16);
+  assert.equal(opened.room.state?.players[1].rack.length, 15);
+});
+
+test("an abandoned host cannot start the next round and the first seated human can", () => {
+  const opened = createRoom({
+    hostName: "Ana",
+    seats: [{ kind: "human" }, { kind: "human" }, { kind: "human" }],
+    code: "mesa7",
+    seed: 4,
+  });
+  const mid = joinRoom(opened.room, "Luis");
+  const last = joinRoom(opened.room, "Sol");
+  const state = opened.room.state;
+  assert.ok(state);
+  state.over = true;
+  state.scores = [1, 2, 3];
+  dispatchSocket(opened.room, opened.token, JSON.stringify({ type: "leave" }));
+  assert.equal(opened.room.seats[0].abandoned, true);
+  assert.equal(opened.room.opponentLeft, false);
+  assert.throws(() => nextRoundFor(opened.room, last.token), /No podés empezar la ronda siguiente/);
+  assert.equal(opened.room.state?.round, 1);
+  nextRoundFor(opened.room, mid.token);
+  assert.equal(opened.room.state?.round, 2);
+});
+
+test("socket hides unexpected errors and keeps move errors", () => {
+  const opened = createRoom({
+    hostName: "Ana",
+    seats: [{ kind: "human" }, { kind: "human" }],
+    code: "mesaerr",
+    seed: 3,
+  });
+  const guest = joinRoom(opened.room, "Luis");
+  const denied = dispatchSocket(opened.room, guest.token, JSON.stringify({ type: "draw", requestId: "req-deny" }));
+  assert.equal(denied.type, "error");
+  if (denied.type === "error") assert.match(denied.message, /no es tu turno/i);
+
+  const logs: unknown[][] = [];
+  const originalLog = console.error;
+  const originalDraw = GameEngine.prototype.draw;
+  console.error = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  GameEngine.prototype.draw = function () {
+    throw new Error("sqlite failed");
+  };
+  try {
+    const result = dispatchSocket(opened.room, opened.token, JSON.stringify({ type: "draw", requestId: "req-err" }));
+    assert.deepEqual(result, { type: "error", message: "Error interno", requestId: "req-err" });
+    assert.equal(JSON.stringify(result).includes("sqlite"), false);
+    assert.ok(logs.some((args) => args.map(String).join(" ").includes("sqlite")));
+  } finally {
+    GameEngine.prototype.draw = originalDraw;
+    console.error = originalLog;
+  }
 });
 
 test("internal errors stay generic", () => {

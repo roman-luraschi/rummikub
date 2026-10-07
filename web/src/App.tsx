@@ -56,10 +56,10 @@ function tileGroupKey(tiles: { id: number }[]) {
   return [...tiles.map((tile) => tile.id)].sort((a, b) => a - b).join(",");
 }
 
-function unfinishedPileIds(current: Pile[]) {
+function unfinishedPileIds(current: Pile[], committed: Parameters<typeof classifyPile>[1] = []) {
   return current
     .filter((pile) => {
-      const kind = classifyPile(pile.tiles).kind;
+      const kind = classifyPile(pile.tiles, committed).kind;
       return kind !== "group" && kind !== "run";
     })
     .map((pile) => pile.id);
@@ -128,6 +128,7 @@ export default function App() {
   const [onlineOn, setOnlineOn] = useState(false);
   const [reconnecting, setReconnecting] = useState(() => loadOnlineSession() != null);
   const [linkCode] = useState(() => new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "");
+  const [leftOpen, setLeftOpen] = useState(false);
   const gameRef = useRef<GamePayload | null>(null);
   const pilesRef = useRef<Pile[]>([]);
   const lastGameId = useRef<string | null>(null);
@@ -136,6 +137,7 @@ export default function App() {
   const onlineRef = useRef<RoomConnection | null>(null);
   const onlineActive = useRef(false);
   const busyRef = useRef(false);
+  const busyToken = useRef(0);
   const queuedRemote = useRef<{ payload: GamePayload; deal: boolean } | null>(null);
   const handlersRef = useRef({
     apply: (_payload: GamePayload, _deal: boolean) => {},
@@ -147,16 +149,25 @@ export default function App() {
   const view = game?.view;
   const spectator = Boolean(game?.spectator);
   const canAct = Boolean(game && game.yourTurn && !view?.over && !busy && !spectator);
+  const abandonedSeats = game?.abandoned;
+  const connectedSeats = game?.connected;
+  const firstHuman = view
+    ? view.isBot.findIndex((bot, index) => !bot && !abandonedSeats?.[index] && (connectedSeats ? Boolean(connectedSeats[index]) : true))
+    : -1;
   const offerNextRound = Boolean(
     view &&
       view.over &&
       !view.matchOver &&
+      !game?.opponentLeft &&
       mayStartNextRound({
         online: onlineOn,
         seat: view.playerId,
-        hostConnected: Boolean(game?.connected?.[0]),
-        selfConnected: onlineOn ? Boolean(game?.connected?.[view.playerId]) : true,
+        hostConnected: Boolean(connectedSeats?.[0]) && !abandonedSeats?.[0],
+        selfConnected: onlineOn ? Boolean(connectedSeats?.[view.playerId]) : true,
         isBot: view.isBot[view.playerId],
+        hostAbandoned: Boolean(abandonedSeats?.[0]),
+        selfAbandoned: Boolean(abandonedSeats?.[view.playerId]),
+        firstHuman: firstHuman >= 0 ? firstHuman : undefined,
       }),
   );
   const timedTurn = Boolean(
@@ -170,7 +181,13 @@ export default function App() {
   const onTableIds = useMemo(() => pileTileIds(piles), [piles]);
   const rackTiles = view?.rack.filter((tile) => !onTableIds.has(tile.id)) ?? [];
   const dirty = Boolean(view && layoutSignature(piles) !== committedSignature(view.table.melds));
-  const tableReady = piles.length > 0 && piles.every((pile) => classifyPile(pile.tiles).kind === "group" || classifyPile(pile.tiles).kind === "run");
+  const committedMelds = view?.table.melds ?? [];
+  const tableReady =
+    piles.length > 0 &&
+    piles.every((pile) => {
+      const kind = classifyPile(pile.tiles, committedMelds).kind;
+      return kind === "group" || kind === "run";
+    });
   const canFinishTurn = Boolean(canAct && dirty);
   const pileLayout = layoutSignature(piles);
   const rejectedIds = rejectedPlay?.layout === pileLayout ? rejectedPlay.ids : [];
@@ -194,8 +211,13 @@ export default function App() {
     setResultOpen(Boolean(view?.over));
   }, [game?.id, view?.over]);
 
+  useEffect(() => {
+    if (game?.opponentLeft) setLeftOpen(true);
+  }, [game?.id, game?.opponentLeft]);
+
   const status = useMemo(() => {
     if (!view) return "Elegí dificultad y empezá una partida.";
+    if (game?.opponentLeft) return "Se desconectó un contrincante. La partida terminó.";
     if (view.over) {
       if (view.matchOver && view.winner != null) {
         return `Partida terminada. Gana ${view.names[view.winner]} con ${view.scores[view.winner]} puntos.`;
@@ -482,14 +504,18 @@ export default function App() {
   }
 
   async function withBusy(fn: () => Promise<void>) {
+    if (busyRef.current) return;
+    const op = ++busyToken.current;
     busyRef.current = true;
     setBusy(true);
     setError("");
     try {
       await fn();
-    } catch (err) {
+    } catch (err: unknown) {
+      if (busyToken.current !== op) return;
       setError(err instanceof Error ? err.message : "Error");
     } finally {
+      if (busyToken.current !== op) return;
       busyRef.current = false;
       setBusy(false);
       setBanner("");
@@ -588,6 +614,7 @@ export default function App() {
   }
 
   async function onNextRound() {
+    if (busyRef.current) return;
     if (!game || !view?.over || view.matchOver) return;
     playGen.current += 1;
     await withBusy(async () => {
@@ -731,6 +758,7 @@ export default function App() {
     setPiles([]);
     setBanner("");
     setTurnLeft(null);
+    setLeftOpen(false);
   }
 
   function leaveOnline() {
@@ -759,6 +787,7 @@ export default function App() {
   }
 
   async function onDraw() {
+    if (busyRef.current) return;
     if (!game || !view) return;
     const pulledFromRack = view.rack.some((tile) => onTableIds.has(tile.id));
     if (pulledFromRack) {
@@ -773,6 +802,7 @@ export default function App() {
   }
 
   async function onTurnTimeout() {
+    if (busyRef.current) return;
     const current = gameRef.current;
     if (!current?.yourTurn || current.view.over || timedOut.current) return;
     timedOut.current = true;
@@ -801,6 +831,7 @@ export default function App() {
       setTurnLeft(left);
       if (left <= 0) {
         window.clearInterval(id);
+        if (busyRef.current) return;
         void onTurnTimeout();
       }
     }, 100);
@@ -808,10 +839,11 @@ export default function App() {
   }, [timedTurn, canAct, game?.id, view?.history.length]);
 
   async function onPlay() {
+    if (busyRef.current) return;
     if (!game) return;
     if (dirty) {
       if (!tableReady) {
-        setRejectedPlay({ layout: layoutSignature(piles), ids: unfinishedPileIds(piles) });
+        setRejectedPlay({ layout: layoutSignature(piles), ids: unfinishedPileIds(piles, committedMelds) });
         setError("Quedó un juego incompleto o inválido en la mesa.");
         return;
       }
@@ -1008,7 +1040,7 @@ export default function App() {
               ) : (
                 <div className="flex flex-wrap content-start gap-x-8 gap-y-7">
                   {piles.map((pile, pileIndex) => {
-                    const status = classifyPile(pile.tiles);
+                    const status = classifyPile(pile.tiles, committedMelds);
                     const pileHot = hover?.place === "pile" && hover.pile === pileIndex;
                     return (
                       <div
@@ -1147,6 +1179,33 @@ export default function App() {
               </button>
             </div>
           </section>
+        </div>
+      )}
+
+      {leftOpen && game?.opponentLeft && (
+        <div className="result-overlay fixed inset-0 z-[210] grid place-items-center p-5" role="presentation">
+          <div
+            className="result-modal is-loss w-full max-w-[440px] rounded-[22px] px-6 pt-7 pb-5 text-center"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="left-title"
+          >
+            <p className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.18em] text-gold">Partida terminada</p>
+            <h2 id="left-title" className="font-display text-4xl leading-tight text-ivory">
+              Se desconectó un contrincante
+            </h2>
+            <p className="mt-2.5 mb-4 text-[15px] opacity-80">
+              Quedó un solo jugador en la sala, así que la partida terminó.
+            </p>
+            <div className="flex flex-col justify-center gap-2.5 sm:flex-row sm:flex-wrap">
+              <button className="primary w-full sm:w-auto" onClick={leaveOnline}>
+                Salir de la sala
+              </button>
+              <button className="ghost w-full sm:w-auto" onClick={() => setLeftOpen(false)}>
+                Ver la mesa
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

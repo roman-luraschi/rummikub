@@ -58,15 +58,27 @@ export type RoomConnection = {
   close: () => void;
 };
 
+type RoomUpdate = Extract<ServerMessage, { type: "state" | "waiting" }>;
+
 export function connectRoom(creds: RoomCredentials, handlers: RoomHandlers): RoomConnection {
   const ws = new WebSocket(socketUrl(creds));
   let pending: { id: string; resolve: (payload: GamePayload) => void; reject: (error: Error) => void } | null = null;
+  let queued: { at: number; message: RoomUpdate } | null = null;
+  let clock = 0;
+  let hold = false;
   let closedByUs = false;
+
+  const deliverUpdate = (message: RoomUpdate) => {
+    if (message.type === "waiting") handlers.onWaiting(message.waiting);
+    else handlers.onState(message.payload);
+  };
 
   const failPending = (error: Error) => {
     if (!pending) return;
     pending.reject(error);
     pending = null;
+    queued = null;
+    hold = false;
   };
 
   ws.onopen = () => {
@@ -96,17 +108,28 @@ export function connectRoom(creds: RoomCredentials, handlers: RoomHandlers): Roo
       handlers.onWelcome(message);
       return;
     }
-    if (message.type === "waiting") {
-      handlers.onWaiting(message.waiting);
-      return;
-    }
-    if (pending && message.requestId === pending.id) {
-      pending.resolve(message.payload);
+    if (message.type !== "state" && message.type !== "waiting") return;
+    const at = ++clock;
+    if (message.type === "state" && pending && message.requestId === pending.id) {
+      const responseAt = at;
+      const current = pending;
       pending = null;
+      hold = true;
+      current.resolve(message.payload);
+      queueMicrotask(() => {
+        hold = false;
+        const extra = queued && queued.at > responseAt ? queued.message : null;
+        queued = null;
+        if (extra) deliverUpdate(extra);
+      });
       return;
     }
-    if (pending) return;
-    handlers.onState(message.payload);
+    if (pending != null || hold) {
+      queued = { at, message };
+      return;
+    }
+    queued = null;
+    deliverUpdate(message);
   };
 
   ws.onclose = () => {

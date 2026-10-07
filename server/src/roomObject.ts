@@ -8,6 +8,7 @@ import {
   indexesToClose,
   joinRoom,
   setConnected,
+  settle,
   welcomeFor,
   type RoomSnapshot,
 } from "../../web/src/online/room";
@@ -43,12 +44,14 @@ export class RoomObject extends DurableObject<Env> {
   }
 
   async enterRoom(name: string): Promise<RoomCredentials> {
-    const room = this.load();
-    if (!room) throw new Error("Sala no encontrada");
-    const joined = joinRoom(room, name ?? "");
-    await this.save(room);
-    this.broadcast(room, joined.frames);
-    return { code: room.code, token: joined.token, seat: joined.seat };
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const room = this.load();
+      if (!room) throw new Error("Sala no encontrada");
+      const joined = joinRoom(room, name ?? "");
+      const fresh = await this.commit(room);
+      this.broadcast(fresh, joined.frames);
+      return { code: fresh.code, token: joined.token, seat: joined.seat };
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -65,81 +68,94 @@ export class RoomObject extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
-    await this.ctx.storage.setAlarm(Date.now() + ROOM_IDLE_MS);
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.setAlarm(this.alarmWhen(this.load()));
+    });
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
-    const room = this.load();
-    if (!room) {
-      this.sendError(ws, "Sala no encontrada");
-      return;
-    }
-    const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-    const result = dispatchSocket(room, this.tokenOf(ws) || null, text);
-    if (result.type === "close") {
-      ws.close(1008, "No se pudo autenticar");
-      return;
-    }
-    if (result.type === "authenticate") {
-      ws.serializeAttachment({ token: result.token } satisfies SocketAttachment);
-      setConnected(room, result.token, true);
-      await this.save(room);
-      this.closePrevious(ws, result.token);
-      ws.send(JSON.stringify(welcomeFor(room, result.token)));
-      for (const socket of this.ctx.getWebSockets()) {
-        if (socket === ws) continue;
-        this.sendTo(socket, room);
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const room = this.load();
+      if (!room) {
+        this.sendError(ws, "Sala no encontrada");
+        return;
       }
-      return;
-    }
-    if (result.type === "left") {
-      await this.save(room);
-      this.broadcast(room);
-      try {
-        ws.close(1000, "Saliste de la sala");
-      } catch {
-        // The socket can already be closing.
+      const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+      const result = dispatchSocket(room, this.tokenOf(ws) || null, text);
+      if (result.type === "close") {
+        ws.close(1008, "No se pudo autenticar");
+        return;
       }
-      return;
-    }
-    if (result.type === "error") {
-      this.sendError(ws, result.message, result.requestId ?? "");
-      return;
-    }
-    await this.save(room);
-    this.broadcast(room, result.frames, { token: this.tokenOf(ws), requestId: result.requestId });
+      if (result.type === "authenticate") {
+        ws.serializeAttachment({ token: result.token } satisfies SocketAttachment);
+        setConnected(room, result.token, true);
+        const fresh = await this.commit(room);
+        this.closePrevious(ws, result.token);
+        ws.send(JSON.stringify(welcomeFor(fresh, result.token)));
+        for (const socket of this.ctx.getWebSockets()) {
+          if (socket === ws) continue;
+          this.sendTo(socket, fresh);
+        }
+        return;
+      }
+      if (result.type === "left") {
+        const fresh = await this.commit(room);
+        this.broadcast(fresh, result.frames);
+        try {
+          ws.close(1000, "Saliste de la sala");
+        } catch {
+          // The socket can already be closing.
+        }
+        return;
+      }
+      if (result.type === "error") {
+        this.sendError(ws, result.message, result.requestId ?? "");
+        return;
+      }
+      const fresh = await this.commit(room);
+      this.broadcast(fresh, result.frames, { token: this.tokenOf(ws), requestId: result.requestId });
+    });
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
-    const token = this.tokenOf(ws);
-    if (!token) return;
-    const others = this.ctx.getWebSockets().filter((socket) => socket !== ws && this.tokenOf(socket) === token);
-    if (others.length) return;
-    const room = this.load();
-    if (!room) return;
-    try {
-      setConnected(room, token, false);
-    } catch {
-      return;
-    }
-    await this.save(room);
-    this.broadcast(room);
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const token = this.tokenOf(ws);
+      if (!token) return;
+      const others = this.ctx.getWebSockets().filter((socket) => socket !== ws && this.tokenOf(socket) === token);
+      if (others.length) return;
+      const room = this.load();
+      if (!room) return;
+      try {
+        setConnected(room, token, false);
+      } catch {
+        return;
+      }
+      const frames = settle(room, Date.now());
+      const fresh = await this.commit(room);
+      this.broadcast(fresh, frames);
+    });
   }
 
   async alarm(): Promise<void> {
     await this.ctx.blockConcurrencyWhile(async () => {
-      if (this.ctx.getWebSockets().length > 0) {
-        await this.ctx.storage.setAlarm(Date.now() + ROOM_IDLE_MS);
-        return;
-      }
       const room = this.load();
-      if (room && Date.now() - room.lastActivity < ROOM_IDLE_MS) {
-        await this.ctx.storage.setAlarm(room.lastActivity + ROOM_IDLE_MS);
+      if (room?.passAt != null && Date.now() + 1000 >= room.passAt) {
+        const frames = settle(room, Math.max(Date.now(), room.passAt));
+        const fresh = await this.commit(room);
+        this.broadcast(fresh, frames);
         return;
       }
       if (this.ctx.getWebSockets().length > 0) {
-        await this.ctx.storage.setAlarm(Date.now() + ROOM_IDLE_MS);
+        await this.ctx.storage.setAlarm(this.alarmWhen(room));
+        return;
+      }
+      if (room && Date.now() - room.lastActivity < ROOM_IDLE_MS) {
+        await this.ctx.storage.setAlarm(this.alarmWhen(room));
+        return;
+      }
+      if (this.ctx.getWebSockets().length > 0) {
+        await this.ctx.storage.setAlarm(this.alarmWhen(room));
         return;
       }
       await this.ctx.storage.deleteAll();
@@ -160,13 +176,24 @@ export class RoomObject extends DurableObject<Env> {
     return JSON.parse(rows[0].data) as RoomSnapshot;
   }
 
+  private alarmWhen(room: RoomSnapshot | null): number {
+    const idle = Date.now() + ROOM_IDLE_MS;
+    if (room?.passAt != null) return Math.min(room.passAt, idle);
+    return idle;
+  }
+
   private async save(room: RoomSnapshot): Promise<void> {
     room.lastActivity = Date.now();
     this.ctx.storage.sql.exec(
       "INSERT INTO room (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data",
       JSON.stringify(room),
     );
-    await this.ctx.storage.setAlarm(Date.now() + ROOM_IDLE_MS);
+    await this.ctx.storage.setAlarm(this.alarmWhen(room));
+  }
+
+  private async commit(room: RoomSnapshot): Promise<RoomSnapshot> {
+    await this.save(room);
+    return this.load() ?? room;
   }
 
   private tokenOf(ws: WebSocket): string {

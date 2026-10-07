@@ -444,35 +444,30 @@ export function configurationFromLayout(
     if (!group.length) continue;
     const tiles: Tile[] = [];
     for (const tileId of group) {
-      if (seen.has(tileId)) throw new Error("La misma ficha aparece dos veces");
+      if (seen.has(tileId)) throw new TableValidationError("La misma ficha aparece dos veces");
       const t = universe.get(tileId);
-      if (!t) throw new Error("Hay una ficha que no está en juego");
+      if (!t) throw new TableValidationError("Hay una ficha que no está en juego");
       seen.add(tileId);
       tiles.push(t);
     }
-    try {
-      melds.push(tryMakeMeld(tiles));
-    } catch (err) {
-      throw new Error(err instanceof Error ? err.message : String(err));
-    }
+    const kept = committed.melds.find((meld) =>
+      meld.tiles.length === tiles.length && meld.tiles.every((tile, index) => tile.id === tiles[index].id),
+    );
+    melds.push(tryMakeMeld(tiles, kept));
   }
   const table: Table = { melds };
-  try {
-    validateEntireTable(table);
-  } catch (err) {
-    throw new Error(err instanceof Error ? err.message : String(err));
-  }
+  validateEntireTable(table);
   const oldIds = tableTileIds(committed);
   const newIds = tableTileIds(table);
   for (const id of oldIds) {
-    if (!newIds.has(id)) throw new Error("Las fichas de la mesa no pueden volver al atril");
+    if (!newIds.has(id)) throw new TableValidationError("Las fichas de la mesa no pueden volver al atril");
   }
   const extra = [...newIds].filter((id) => !oldIds.has(id));
   const rackIds = new Set(rack.map((t) => t.id));
-  if (extra.some((id) => !rackIds.has(id))) throw new Error("Solo se pueden agregar fichas del atril");
-  if (!extra.length) throw new Error("Tenés que bajar al menos una ficha del atril");
+  if (extra.some((id) => !rackIds.has(id))) throw new TableValidationError("Solo se pueden agregar fichas del atril");
+  if (!extra.length) throw new TableValidationError("Tenés que bajar al menos una ficha del atril");
   if (!hasInitialMeld && extra.some((id) => isJoker(universe.get(id)!))) {
-    throw new Error("La apertura de 30 puntos no puede usar comodines");
+    throw new TableValidationError("La apertura de 30 puntos no puede usar comodines");
   }
   const extraSet = new Set(extra);
   return {

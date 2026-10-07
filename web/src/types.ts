@@ -102,4 +102,6 @@ export type GamePayload = {
   steps?: GameStep[];
   /** Online only: one flag per seat. Absent in local games. */
   connected?: boolean[];
+  abandoned?: boolean[];
+  opponentLeft?: boolean;
 };

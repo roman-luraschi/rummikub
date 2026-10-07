@@ -68,7 +68,18 @@ export function inferGroupBindings(tiles: Tile[], rank: number): JokerBinding[] 
   return jokers.map((j, i) => ({ jokerId: j.id, color: missing[i], rank }));
 }
 
-export function tryMakeMeld(tiles: Tile[]): Meld {
+function sameTileOrder(left: { id: number }[], right: { id: number }[]): boolean {
+  return left.length === right.length && left.every((tile, index) => tile.id === right[index].id);
+}
+
+export function tryMakeMeld(tiles: Tile[], kept?: Meld | null): Meld {
+  if (kept && sameTileOrder(kept.tiles, tiles)) {
+    return {
+      kind: kept.kind,
+      tiles: [...kept.tiles],
+      bindings: kept.bindings.map((binding) => ({ ...binding })),
+    };
+  }
   if (tiles.length < 3) throw new TableValidationError("Hace falta un juego de al menos 3 fichas");
   const numbered = tiles.filter((t) => !isJoker(t));
   const jokers = tiles.filter(isJoker);
