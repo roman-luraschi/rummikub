@@ -9,6 +9,8 @@ export interface Env {
 }
 
 const ALLOWED_ORIGINS = new Set([
+  "https://rummi-online.com",
+  "https://www.rummi-online.com",
   "https://rummikub-ai.pages.dev",
   "http://127.0.0.1:5173",
   "http://localhost:5173",
