@@ -12,6 +12,7 @@ import {
 } from "./online/client";
 import { previewSelection } from "./online/preview";
 import type { WaitingInfo } from "./online/protocol";
+import { mayStartNextRound } from "./online/room";
 import {
   buildFlights,
   elementTopLeft,
@@ -50,6 +51,19 @@ import {
 import type { GamePayload, GameStep, TileData } from "./types";
 
 const EXTREME_TURN_SECONDS = 60;
+
+function tileGroupKey(tiles: { id: number }[]) {
+  return [...tiles.map((tile) => tile.id)].sort((a, b) => a - b).join(",");
+}
+
+function unfinishedPileIds(current: Pile[]) {
+  return current
+    .filter((pile) => {
+      const kind = classifyPile(pile.tiles).kind;
+      return kind !== "group" && kind !== "run";
+    })
+    .map((pile) => pile.id);
+}
 
 const actionBtn = "w-full sm:w-auto";
 
@@ -105,6 +119,7 @@ export default function App() {
   const [dealing, setDealing] = useState(false);
   const [hideFrom, setHideFrom] = useState<{ seat?: number; pool?: boolean; count: number } | null>(null);
   const [piles, setPiles] = useState<Pile[]>([]);
+  const [rejectedPlay, setRejectedPlay] = useState<{ layout: string; ids: number[] } | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [hover, setHover] = useState<DropTarget | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
@@ -132,6 +147,18 @@ export default function App() {
   const view = game?.view;
   const spectator = Boolean(game?.spectator);
   const canAct = Boolean(game && game.yourTurn && !view?.over && !busy && !spectator);
+  const offerNextRound = Boolean(
+    view &&
+      view.over &&
+      !view.matchOver &&
+      mayStartNextRound({
+        online: onlineOn,
+        seat: view.playerId,
+        hostConnected: Boolean(game?.connected?.[0]),
+        selfConnected: onlineOn ? Boolean(game?.connected?.[view.playerId]) : true,
+        isBot: view.isBot[view.playerId],
+      }),
+  );
   const timedTurn = Boolean(
     !onlineOn && !spectator && view && !view.over && view.difficulties.some((difficulty) => difficulty === "extreme")
   );
@@ -144,7 +171,9 @@ export default function App() {
   const rackTiles = view?.rack.filter((tile) => !onTableIds.has(tile.id)) ?? [];
   const dirty = Boolean(view && layoutSignature(piles) !== committedSignature(view.table.melds));
   const tableReady = piles.length > 0 && piles.every((pile) => classifyPile(pile.tiles).kind === "group" || classifyPile(pile.tiles).kind === "run");
-  const canConfirm = Boolean(canAct && dirty && tableReady);
+  const canFinishTurn = Boolean(canAct && dirty);
+  const pileLayout = layoutSignature(piles);
+  const rejectedIds = rejectedPlay?.layout === pileLayout ? rejectedPlay.ids : [];
 
   useEffect(() => {
     if (!view) {
@@ -706,7 +735,7 @@ export default function App() {
 
   function leaveOnline() {
     onlineActive.current = false;
-    onlineRef.current?.close();
+    onlineRef.current?.leave();
     onlineRef.current = null;
     clearOnlineSession();
     setOnlineOn(false);
@@ -782,20 +811,38 @@ export default function App() {
     if (!game) return;
     if (dirty) {
       if (!tableReady) {
+        setRejectedPlay({ layout: layoutSignature(piles), ids: unfinishedPileIds(piles) });
         setError("Quedó un juego incompleto o inválido en la mesa.");
         return;
       }
       if (!hasOpened && piles.some((pile) => pile.tiles.some((tile) => tile.isJoker))) {
+        setRejectedPlay({
+          layout: layoutSignature(piles),
+          ids: piles.filter((pile) => pile.tiles.some((tile) => tile.isJoker)).map((pile) => pile.id),
+        });
         setError("La apertura de 30 puntos no puede usar comodines.");
         return;
       }
       await withBusy(async () => {
         const melds = piles.filter((pile) => pile.tiles.length).map((pile) => pile.tiles.map((tile) => tile.id));
-        const payload = onlineRef.current
-          ? await onlineRef.current.play([], melds)
-          : await playTiles(game.id, [], melds);
-        setSelected([]);
-        await applyPayload(payload);
+        try {
+          const payload = onlineRef.current
+            ? await onlineRef.current.play([], melds)
+            : await playTiles(game.id, [], melds);
+          setRejectedPlay(null);
+          setSelected([]);
+          await applyPayload(payload);
+        } catch (err) {
+          const committed = new Set((view?.table.melds ?? []).map((meld) => tileGroupKey(meld.tiles)));
+          const changed = piles
+            .filter((pile) => pile.tiles.length > 0 && !committed.has(tileGroupKey(pile.tiles)))
+            .map((pile) => pile.id);
+          setRejectedPlay({
+            layout: layoutSignature(piles),
+            ids: changed.length ? changed : piles.filter((pile) => pile.tiles.length > 0).map((pile) => pile.id),
+          });
+          throw err;
+        }
       });
       return;
     }
@@ -966,7 +1013,7 @@ export default function App() {
                     return (
                       <div
                         key={pile.id}
-                        className={`meld-set meld-${status.kind}${pileHot ? " is-hot" : ""}${pile.tiles.length === 0 ? " is-placeholder" : ""}`}
+                        className={`meld-set meld-${status.kind}${pileHot ? " is-hot" : ""}${pile.tiles.length === 0 ? " is-placeholder" : ""}${rejectedIds.includes(pile.id) ? " is-rejected" : ""}`}
                         data-pile-id={pile.id}
                         data-drop-pile={pileIndex}
                         data-drop-count={pile.tiles.length}
@@ -1077,10 +1124,10 @@ export default function App() {
                 <>
                   <button
                     className={`primary ${actionBtn}`}
-                    disabled={!canAct || (!canConfirm && selected.length === 0)}
+                    disabled={!canAct || (!canFinishTurn && selected.length === 0)}
                     onClick={onPlay}
                   >
-                    {canConfirm ? "Confirmar turno" : "Bajar al paño"}
+                    {canFinishTurn ? "Confirmar turno" : "Bajar al paño"}
                   </button>
                   <button className={actionBtn} disabled={!canAct || dirty} onClick={onDraw}>
                     Robar del pozo
@@ -1090,7 +1137,7 @@ export default function App() {
                   </button>
                 </>
               )}
-              {view.over && !view.matchOver && (
+              {offerNextRound && (
                 <button className={`primary ${actionBtn}`} disabled={busy} onClick={() => void onNextRound()}>
                   Siguiente ronda
                 </button>
@@ -1109,6 +1156,7 @@ export default function App() {
           spectator={spectator}
           onClose={() => setResultOpen(false)}
           onNewGame={onlineOn ? leaveOnline : resetToLobby}
+          allowNextRound={offerNextRound}
           onNextRound={() => void onNextRound()}
         />
       )}

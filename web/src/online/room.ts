@@ -11,6 +11,10 @@ import {
   type WaitingInfo,
 } from "./protocol";
 
+const GENERIC_ERROR = "Error interno";
+const HOST_ROUND_ERROR = "Solo el anfitrión puede empezar la ronda siguiente";
+const ROUND_ERROR = "No podés empezar la ronda siguiente";
+
 export class RoomError extends Error {}
 
 export interface RoomSeat {
@@ -26,15 +30,25 @@ export interface RoomSnapshot {
   phase: "lobby" | "playing";
   seats: RoomSeat[];
   state: GameState | null;
-  seed: number;
+  seed: number | null;
+  lastActivity: number;
 }
+
+export type GameCommand = Extract<ClientMessage, { type: "draw" | "play" | "nextRound" }>;
+
+export type SocketDispatch =
+  | { type: "close" }
+  | { type: "authenticate"; token: string }
+  | { type: "left" }
+  | { type: "frames"; frames: GameState[]; requestId: string }
+  | { type: "error"; message: string; requestId?: string };
 
 const engine = new GameEngine();
 const bot = new RummyBot();
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export function randomCode(length = 5): string {
+export function randomCode(length = 8): string {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
   return [...bytes].map((byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
@@ -101,7 +115,8 @@ export function createRoom(input: {
   const room: RoomSnapshot = {
     code: normalizeCode(input.code ?? randomCode()),
     phase: "lobby",
-    seed: input.seed ?? Math.floor(Math.random() * 1_000_000),
+    seed: input.seed ?? null,
+    lastActivity: Date.now(),
     state: null,
     seats: seats.map((seat) => {
       if (seat.kind === "bot") {
@@ -182,9 +197,45 @@ export function playFor(room: RoomSnapshot, token: string, tileIds: number[], me
   return frames;
 }
 
+export function mayStartNextRound(input: {
+  online: boolean;
+  seat: number;
+  hostConnected: boolean;
+  selfConnected: boolean;
+  isBot: boolean;
+}): boolean {
+  if (!input.online) return true;
+  if (input.isBot || !input.selfConnected) return false;
+  if (input.hostConnected) return input.seat === 0;
+  return true;
+}
+
+export function leaveSeat(room: RoomSnapshot, token: string): void {
+  const seat = seatIndex(room, token);
+  room.seats[seat].token = null;
+  room.seats[seat].connected = false;
+}
+
+export function indexesToClose(tokens: (string | null)[], currentIndex: number, token: string): number[] {
+  const closed: number[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (index !== currentIndex && tokens[index] === token) closed.push(index);
+  }
+  return closed;
+}
+
+export function clientError(error: unknown): { status: number; message: string; expose: boolean } {
+  if (error instanceof RoomError) return { status: 400, message: error.message, expose: true };
+  if (error instanceof Error && error.message === "La sala ya existe") {
+    return { status: 400, message: error.message, expose: true };
+  }
+  return { status: 500, message: GENERIC_ERROR, expose: false };
+}
+
 export function nextRoundFor(room: RoomSnapshot, token: string): GameState[] {
   const draft = structuredClone(room);
-  seatIndex(draft, token);
+  const seat = seatIndex(draft, token);
+  if (!canAdvanceRound(draft, seat)) throw new RoomError(roundStartError(draft));
   if (!draft.state || draft.phase !== "playing") throw new RoomError("La partida todavía no empezó");
   if (!draft.state.over) throw new RoomError("La ronda sigue en juego");
   if (isMatchOver(draft.state)) throw new RoomError("La partida ya terminó");
@@ -194,13 +245,84 @@ export function nextRoundFor(room: RoomSnapshot, token: string): GameState[] {
   return frames;
 }
 
-export function applyCommand(room: RoomSnapshot, token: string, command: ClientMessage): GameState[] {
+export function applyCommand(room: RoomSnapshot, token: string, command: GameCommand): GameState[] {
   if (command.type === "draw") return drawFor(room, token);
   if (command.type === "nextRound") return nextRoundFor(room, token);
   return playFor(room, token, command.tileIds, command.melds);
 }
 
-export function parseClientMessage(raw: string): ClientMessage {
+export function dispatchSocket(room: RoomSnapshot, token: string | null, raw: string): SocketDispatch {
+  if (!token) {
+    const auth = parseAuth(raw);
+    if (!auth) return { type: "close" };
+    try {
+      seatIndex(room, auth);
+    } catch {
+      return { type: "close" };
+    }
+    return { type: "authenticate", token: auth };
+  }
+  if (isLeave(raw)) {
+    leaveSeat(room, token);
+    return { type: "left" };
+  }
+  const requestId = requestIdOf(raw);
+  try {
+    const command = parseClientMessage(raw);
+    const frames = applyCommand(room, token, command);
+    return { type: "frames", frames, requestId: command.requestId };
+  } catch (error: unknown) {
+    return { type: "error", message: error instanceof Error ? error.message : "Error", requestId: requestId || undefined };
+  }
+}
+
+function canAdvanceRound(room: RoomSnapshot, seat: number): boolean {
+  const actor = room.seats[seat];
+  return mayStartNextRound({
+    online: true,
+    seat,
+    hostConnected: Boolean(room.seats[0]?.connected),
+    selfConnected: Boolean(actor?.connected),
+    isBot: Boolean(actor?.isBot),
+  });
+}
+
+function roundStartError(room: RoomSnapshot): string {
+  return room.seats[0]?.connected ? HOST_ROUND_ERROR : ROUND_ERROR;
+}
+
+function parseAuth(raw: string): string | null {
+  const data = parseJson(raw);
+  if (!data) return null;
+  const body = data as { type?: unknown; token?: unknown };
+  if (body.type !== "auth" || typeof body.token !== "string" || !body.token) return null;
+  return body.token;
+}
+
+function isLeave(raw: string): boolean {
+  const data = parseJson(raw);
+  if (!data) return false;
+  return (data as { type?: unknown }).type === "leave";
+}
+
+function requestIdOf(raw: string): string {
+  const data = parseJson(raw);
+  if (!data) return "";
+  const requestId = (data as { requestId?: unknown }).requestId;
+  return typeof requestId === "string" ? requestId : "";
+}
+
+function parseJson(raw: string): object | null {
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!data || typeof data !== "object") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export function parseClientMessage(raw: string): GameCommand {
   let data: unknown;
   try {
     data = JSON.parse(raw);

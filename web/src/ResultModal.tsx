@@ -4,6 +4,7 @@ import type { GameView } from "./types";
 type ResultModalProps = {
   view: GameView;
   spectator: boolean;
+  allowNextRound: boolean;
   onClose: () => void;
   onNewGame: () => void;
   onNextRound: () => void;
@@ -45,7 +46,7 @@ function resultCopy(view: GameView, spectator: boolean) {
   };
 }
 
-export default function ResultModal({ view, spectator, onClose, onNewGame, onNextRound }: ResultModalProps) {
+export default function ResultModal({ view, spectator, allowNextRound, onClose, onNewGame, onNextRound }: ResultModalProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const copy = resultCopy(view, spectator);
 
@@ -94,13 +95,13 @@ export default function ResultModal({ view, spectator, onClose, onNewGame, onNex
           })}
         </ul>
         <div className="flex flex-col justify-center gap-2.5 sm:flex-row sm:flex-wrap">
-          {!view.matchOver && (
+          {!view.matchOver && allowNextRound && (
             <button ref={closeRef} className="primary w-full sm:w-auto" onClick={onNextRound}>
               Siguiente ronda
             </button>
           )}
           <button
-            ref={view.matchOver ? closeRef : undefined}
+            ref={view.matchOver || !allowNextRound ? closeRef : undefined}
             className={`${view.matchOver ? "primary" : "ghost"} w-full sm:w-auto`}
             onClick={onNewGame}
           >

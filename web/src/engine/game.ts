@@ -26,7 +26,7 @@ export interface GameState {
   table: Table;
   current: number;
   scores: number[];
-  seed: number;
+  seed: number | null;
   history: PublicEvent[];
   winner: number | null;
   over: boolean;
@@ -66,16 +66,38 @@ export function cloneState(state: GameState): GameState {
   };
 }
 
+function cryptoBelow(limit: number): number {
+  const range = 0x100000000;
+  const max = range - (range % limit);
+  const buf = new Uint32Array(1);
+  let value = 0;
+  do {
+    crypto.getRandomValues(buf);
+    value = buf[0];
+  } while (value >= max);
+  return value % limit;
+}
+
+function cryptoShuffle<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = cryptoBelow(i + 1);
+    const current = copy[i];
+    copy[i] = copy[j];
+    copy[j] = current;
+  }
+  return copy;
+}
+
 export class GameEngine {
   newGame(
     nPlayers = 2,
-    seed = 1,
+    seed: number | null = 1,
     names?: string[],
     bots?: (string | null)[],
   ): GameState {
     if (nPlayers < 2 || nPlayers > 4) throw new Error("Rummikub supports 2-4 players");
-    const rng = new SeededRng(seed);
-    const deck = rng.shuffle(buildDeck());
+    const deck = seed == null ? cryptoShuffle(buildDeck()) : new SeededRng(seed).shuffle(buildDeck());
     const players: Player[] = [];
     for (let i = 0; i < nPlayers; i++) {
       const rack = deck.splice(deck.length - RACK_SIZE, RACK_SIZE);
@@ -137,7 +159,8 @@ export class GameEngine {
     const names = state.players.map((p) => p.name);
     const bots = state.players.map((p) => p.difficulty);
     const starter = (state.firstPlayer + 1) % state.players.length;
-    const fresh = this.newGame(state.players.length, state.seed + state.round, names, bots);
+    const nextSeed = state.seed == null ? null : state.seed + state.round;
+    const fresh = this.newGame(state.players.length, nextSeed, names, bots);
     fresh.scores = [...state.scores];
     fresh.round = state.round + 1;
     fresh.current = starter;

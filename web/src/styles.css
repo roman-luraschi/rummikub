@@ -216,6 +216,10 @@
 .insert-end { width: 16px; flex-basis: 16px; }
 .meld-set.is-hot { outline: 2px solid var(--color-gold); }
 .meld-set.meld-invalid { border-color: #ff8a80; background: rgba(80, 16, 16, 0.28); }
+.meld-set.is-rejected {
+  border: 2px solid #ff3b30;
+  background: rgba(120, 16, 16, 0.42);
+}
 .meld-set.meld-building { border-style: dotted; }
 .felt-board.is-hot,
 .felt-board.is-droppable.is-hot { outline: 2px dashed var(--color-gold); }

@@ -1,11 +1,13 @@
 import { RoomObject } from "./roomObject";
-import { RoomError, normalizeCode, randomCode } from "../../web/src/online/room";
+import { RateLimiter } from "./rateLimiter";
+import { RoomError, clientError, normalizeCode, randomCode } from "../../web/src/online/room";
 import { PROTOCOL_VERSION, type CreateRoomBody, type ErrorBody, type JoinRoomBody, type RoomCredentials } from "../../web/src/online/protocol";
 
-export { RoomObject };
+export { RoomObject, RateLimiter };
 
 export interface Env {
   ROOMS: DurableObjectNamespace<RoomObject>;
+  LIMITS: DurableObjectNamespace<RateLimiter>;
 }
 
 const ALLOWED_ORIGINS = new Set([
@@ -32,8 +34,22 @@ function withCors(origin: string | null, response: Response): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+const RATE_LIMIT_MESSAGE = "Demasiados intentos. Probá de nuevo más tarde.";
+
+function clientIp(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+async function rateLimit(request: Request, env: Env, bucket: "create" | "join"): Promise<Response | null> {
+  const allowed = await env.LIMITS.getByName(clientIp(request)).allow(bucket);
+  if (allowed) return null;
+  return Response.json({ error: RATE_LIMIT_MESSAGE } satisfies ErrorBody, { status: 429 });
+}
+
+function respondError(error: unknown): Response {
+  const mapped = clientError(error);
+  if (!mapped.expose) console.error(error);
+  return Response.json({ error: mapped.message } satisfies ErrorBody, { status: mapped.status });
 }
 
 async function readJson(request: Request): Promise<unknown> {
@@ -64,9 +80,7 @@ export default {
       }
       if (path === "/ws") return socket(request, env, url);
     } catch (error: unknown) {
-      const body: ErrorBody = { error: errorMessage(error, "Error") };
-      const status = error instanceof RoomError ? 400 : 500;
-      return withCors(origin, Response.json(body, { status }));
+      return withCors(origin, respondError(error));
     }
 
     return withCors(origin, new Response("No encontrado", { status: 404 }));
@@ -74,6 +88,8 @@ export default {
 };
 
 async function create(request: Request, env: Env): Promise<Response> {
+  const limited = await rateLimit(request, env, "create");
+  if (limited) return limited;
   const body = (await readJson(request)) as CreateRoomBody;
   let last = "No se pudo crear la sala";
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -82,14 +98,20 @@ async function create(request: Request, env: Env): Promise<Response> {
       const creds = await env.ROOMS.getByName(code).openRoom(body, code);
       return Response.json(creds);
     } catch (error: unknown) {
-      last = errorMessage(error, last);
-      if (!last.includes("ya existe")) break;
+      const mapped = clientError(error);
+      if (mapped.message.includes("ya existe")) {
+        last = mapped.message;
+        continue;
+      }
+      return respondError(error);
     }
   }
   return Response.json({ error: last } satisfies ErrorBody, { status: 400 });
 }
 
 async function join(request: Request, env: Env): Promise<Response> {
+  const limited = await rateLimit(request, env, "join");
+  if (limited) return limited;
   const body = (await readJson(request)) as JoinRoomBody;
   const code = normalizeCode(body.code ?? "");
   if (!code) return Response.json({ error: "Falta el código" } satisfies ErrorBody, { status: 400 });
@@ -97,7 +119,7 @@ async function join(request: Request, env: Env): Promise<Response> {
     const creds: RoomCredentials = await env.ROOMS.getByName(code).enterRoom(body.name ?? "");
     return Response.json(creds);
   } catch (error: unknown) {
-    return Response.json({ error: errorMessage(error, "No se pudo entrar") } satisfies ErrorBody, { status: 400 });
+    return respondError(error);
   }
 }
 

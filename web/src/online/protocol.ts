@@ -1,6 +1,6 @@
 import type { GamePayload } from "../types";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type SeatRequest = {
   kind: "human" | "bot";
@@ -37,6 +37,8 @@ export type WaitingInfo = {
 };
 
 export type ClientMessage =
+  | { type: "auth"; token: string }
+  | { type: "leave" }
   | { type: "draw"; requestId: string }
   | { type: "play"; requestId: string; tileIds: number[]; melds?: number[][] }
   | { type: "nextRound"; requestId: string };

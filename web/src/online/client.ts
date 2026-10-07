@@ -54,6 +54,7 @@ export type RoomConnection = {
   draw: () => Promise<GamePayload>;
   play: (tileIds: number[], melds?: number[][]) => Promise<GamePayload>;
   nextRound: () => Promise<GamePayload>;
+  leave: () => void;
   close: () => void;
 };
 
@@ -66,6 +67,10 @@ export function connectRoom(creds: RoomCredentials, handlers: RoomHandlers): Roo
     if (!pending) return;
     pending.reject(error);
     pending = null;
+  };
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: "auth", token: creds.token }));
   };
 
   ws.onmessage = (event: MessageEvent<string>) => {
@@ -128,6 +133,14 @@ export function connectRoom(creds: RoomCredentials, handlers: RoomHandlers): Roo
     draw: () => request({ type: "draw" }),
     play: (tileIds, melds) => request({ type: "play", tileIds, melds }),
     nextRound: () => request({ type: "nextRound" }),
+    leave: () => {
+      closedByUs = true;
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "leave" }));
+      ws.onclose = null;
+      ws.onmessage = null;
+      failPending(new Error("Se cortó la conexión"));
+      ws.close();
+    },
     close: () => {
       closedByUs = true;
       ws.onclose = null;
@@ -158,7 +171,6 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 function socketUrl(creds: RoomCredentials): string {
   const params = new URLSearchParams({
     code: creds.code,
-    token: creds.token,
     v: String(PROTOCOL_VERSION),
   });
   const base = multiplayerBase();
