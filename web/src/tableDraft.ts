@@ -218,6 +218,56 @@ function visualRun(tiles: TileData[]): PileStatus | null {
   return { kind: "run", label: "Escalera", bindings };
 }
 
+export function arrangePile(tiles: TileData[]): TileData[] {
+  if (tiles.length < 3 || visualRun(tiles)) return tiles;
+  const ordered = orderLooseRun(tiles);
+  if (!ordered || !visualRun(ordered)) return tiles;
+  return ordered;
+}
+
+function orderLooseRun(tiles: TileData[]): TileData[] | null {
+  const jokers = tiles.filter((tile) => tile.isJoker);
+  const numbered = tiles.filter((tile) => !tile.isJoker);
+  if (!numbered.length) return null;
+  const color = numbered[0].color;
+  const byRank = new Map<number, TileData>();
+  for (const tile of numbered) {
+    if (tile.color !== color || tile.rank == null || byRank.has(tile.rank)) return null;
+    byRank.set(tile.rank, tile);
+  }
+  const total = numbered.length + jokers.length;
+  if (total < 3 || total > 13) return null;
+  let best: TileData[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let start = 1; start <= 13; start += 1) {
+    const window: number[] = [];
+    for (let step = 0; step < total; step += 1) window.push(stepRank(start, step));
+    if (![...byRank.keys()].every((rank) => window.includes(rank))) continue;
+    const missing = window.filter((rank) => !byRank.has(rank));
+    if (missing.length !== jokers.length) continue;
+    let jokerAt = 0;
+    const ordered = window.map((rank) => byRank.get(rank) ?? jokers[jokerAt++]);
+    const score = displacement(tiles, ordered);
+    if (score < bestScore) {
+      best = ordered;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function displacement(current: TileData[], next: TileData[]): number {
+  const index = new Map(current.map((tile, at) => [tile.id, at]));
+  return next.reduce((sum, tile, at) => sum + Math.abs((index.get(tile.id) ?? at) - at), 0);
+}
+
+function arranged(piles: Pile[]): Pile[] {
+  return piles.map((pile) => {
+    const tiles = arrangePile(pile.tiles);
+    return tiles === pile.tiles ? pile : { ...pile, tiles };
+  });
+}
+
 export function applyDrop(
   piles: Pile[],
   tile: TileData,
@@ -230,7 +280,7 @@ export function applyDrop(
     if (committedIds.has(tile.id)) {
       return { piles, error: "Las fichas de la mesa no pueden volver al atril." };
     }
-    return { piles: removeTile(piles, origin, tile.id) };
+    return { piles: arranged(removeTile(piles, origin, tile.id)) };
   }
 
   if (!hasOpened && committedIds.has(tile.id)) {
@@ -263,15 +313,15 @@ export function applyDrop(
 
   const next = removeTile(piles, origin, tile.id);
   if (dest.place === "felt") {
-    return { piles: [...next, { id: nextPileId++, tiles: [tile] }] };
+    return { piles: arranged([...next, { id: nextPileId++, tiles: [tile] }]) };
   }
   if (destPile < 0 || destPile >= next.length) {
-    return { piles: [...next, { id: nextPileId++, tiles: [tile] }] };
+    return { piles: arranged([...next, { id: nextPileId++, tiles: [tile] }]) };
   }
   const copy = next.map((pile) => ({ ...pile, tiles: [...pile.tiles] }));
   const insertAt = Math.max(0, Math.min(destIndex, copy[destPile].tiles.length));
   copy[destPile].tiles.splice(insertAt, 0, tile);
-  return { piles: copy.filter((pile) => pile.tiles.length > 0) };
+  return { piles: arranged(copy.filter((pile) => pile.tiles.length > 0)) };
 }
 
 function removeTile(piles: Pile[], origin: DragOrigin, tileId: number): Pile[] {

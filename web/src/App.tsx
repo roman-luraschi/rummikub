@@ -1038,7 +1038,7 @@ export default function App() {
                   </span>
                 </div>
               ) : (
-                <div className="flex flex-wrap content-start gap-x-8 gap-y-7">
+                <div className="flex w-full min-w-0 flex-wrap content-start gap-x-8 gap-y-7">
                   {piles.map((pile, pileIndex) => {
                     const status = classifyPile(pile.tiles, committedMelds);
                     const pileHot = hover?.place === "pile" && hover.pile === pileIndex;

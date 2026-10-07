@@ -95,7 +95,8 @@
   position: relative;
   border-radius: 16px;
   padding: 22px 16px 26px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   box-shadow:
     inset 0 18px 28px rgba(0, 0, 0, 0.34),
     inset 0 -10px 16px rgba(0, 0, 0, 0.2),
@@ -188,11 +189,14 @@
   border-radius: 16px;
   padding: 18px 14px 12px;
   position: relative;
+  max-width: 100%;
+  min-width: 0;
 }
 .meld-tag {
   position: absolute;
   top: -10px;
   left: 12px;
+  max-width: calc(100% - 24px);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -200,8 +204,15 @@
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 999px;
   padding: 2px 8px;
+  white-space: nowrap;
 }
-.meld-tiles { display: flex; align-items: flex-end; }
+.meld-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  row-gap: 8px;
+  max-width: 100%;
+}
 .meld-tile { margin-left: -10px; }
 .meld-tile:first-child { margin-left: 0; }
 .meld-tile-wrap { display: flex; align-items: flex-end; }
