@@ -1,58 +1,45 @@
-# Rummikub AI
+Rummi Online
+Rummikub en el navegador, con un bot de 5 niveles de dificultad y multijugador online por salas.
 
-Motor de reglas + TableSolver + bot con 5 dificultades, todo en TypeScript.
+Jugar ahora en rummi-online.com
 
-La **UI piensa en el navegador** (Web Worker), igual que Chess.com / Lichess contra la computadora: no hace falta un servidor para jugar.
+<!-- Agregá acá una captura o GIF del juego: ![Rummi Online](docs/screenshot.png) -->
+Qué tiene
+Motor de reglas y solver de mesa: valida jugadas y busca reacomodos válidos de las fichas que ya están en la mesa.
+Bot con 5 dificultades (easy, normal, hard, very_hard, extreme) que corre en un Web Worker, en tu navegador y sin servidor, igual que jugar contra la computadora en Chess.com o Lichess.
+Multijugador online: salas por código, con un Cloudflare Worker y un Durable Object por sala.
+Tests y benchmarks de self-play: el bot juega contra sí mismo para medir si cada dificultad realmente le gana a la anterior.
+Stack
+Frontend: React 18, TypeScript, Vite y Tailwind CSS 4.
+Bot: TypeScript corriendo en un Web Worker.
+Multijugador: Cloudflare Workers y Durable Objects.
+Deploy: Cloudflare, con CI que en cada push a main corre los tests y publica.
+Correrlo localmente
+Requiere Node 22 o superior.
 
-## Jugar
 
-```powershell
 cd web
 npm install
 npm run dev
-```
+Abrí http://127.0.0.1:5173.
 
-Abrí `http://127.0.0.1:5173`. El bot corre en un worker de la pestaña.
+Para jugar online en local, levantá además el servidor de salas en otra terminal:
 
-## Tests y self-play
 
-```powershell
-cd web
-npm test
-npm run bench -- hard easy 8 1
-npm run bench -- extreme hard 12 1
-```
-
-En Windows, `npm run bench -- --a extreme` se come los flags; pasá `dificultadA dificultadB juegos seed` como argumentos posicionales. Hard debería ganar la mayoría vs Easy. Extreme vs Hard es más lento (~15s por partida) y sirve para ver si Extreme se separa; si no, hay que subir el peso del ply, no el reloj.
-
-Dificultades: `easy`, `normal`, `hard`, `very_hard`, `extreme`.
-
-## Multijugador
-
-La partida local sigue en el navegador. Las salas online las lleva un Worker con un Durable Object por código, en `server/`.
-
-En una terminal, con Node 22 o más (`nvm use 24` si el `node` por defecto es más viejo):
-
-```powershell
 cd server
 npm install
 npm run dev
-```
+El sitio se comunica con el Worker a través del proxy de Vite. En el menú, "En línea" crea o busca una sala.
 
-En otra, `cd web` y `npm run dev`. El sitio en `http://127.0.0.1:5173` habla con el Worker por el proxy de Vite. En el menú, "En línea" crea o busca una sala.
+Tests y self-play
 
-## Publicar (Cloudflare Pages)
-
-El juego está en: **https://rummikub-ai.pages.dev/**
-
-El repo es privado: https://github.com/roman-luraschi/rummikub-ai  
-Un push a `main` corre los tests, publica esta página y despliega el Worker de salas.
-
-El build de Pages usa el secret `VITE_MULTIPLAYER_URL` (la URL `https://rummikub-rooms.<subdominio>.workers.dev` que imprime `npm run deploy` en `server/`). El token de Cloudflare tiene que poder publicar Workers y Durable Objects, además de Pages.
-
-Para publicar a mano:
-
-```powershell
 cd web
-npm run deploy
-```
+npm test
+npm run bench -- hard easy 8 1
+Los argumentos de bench son dificultadA dificultadB partidas seed. Se espera que Hard le gane a Easy la mayoría de las partidas.
+
+Deploy
+Un push a main corre los tests, publica el sitio y despliega el Worker de salas. El build necesita la variable VITE_MULTIPLAYER_URL con la URL del Worker que imprime npm run deploy en server/.
+
+Autor
+Román Rodríguez Luraschi · LinkedIn · GitHub
